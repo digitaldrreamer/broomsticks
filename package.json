@@ -1,0 +1,44 @@
+{
+  "name": "broomsticks",
+  "version": "0.0.0",
+  "description": "Sweep leaked secrets out of your AI coding-assistant chat transcripts (Claude Code, Codex, Cursor). Dry-run by default, backups before every write, zero runtime dependencies.",
+  "type": "module",
+  "bin": {
+    "broom": "bin/broom.mjs",
+    "broomsticks": "bin/broom.mjs"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "PLAN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "keywords": [
+    "secrets",
+    "redaction",
+    "security",
+    "claude-code",
+    "codex",
+    "cursor",
+    "transcript",
+    "api-key",
+    "leak",
+    "scrub",
+    "gitleaks",
+    "ai"
+  ],
+  "author": "digitaldrreamer",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/digitaldrreamer/broomsticks.git"
+  },
+  "bugs": {
+    "url": "https://github.com/digitaldrreamer/broomsticks/issues"
+  },
+  "homepage": "https://github.com/digitaldrreamer/broomsticks#readme",
+  "dependencies": {}
+}
