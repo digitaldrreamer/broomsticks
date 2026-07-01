@@ -12,6 +12,8 @@ import { redactText }       from '../src/redactor.mjs'
 import { BackupSession }    from '../src/backup.mjs'
 import { printReport, printJsonReport } from '../src/report.mjs'
 import { discoverTargets as claudeCodeTargets } from '../src/sources/claude-code.mjs'
+import { discoverTargets as codexTargets }      from '../src/sources/codex.mjs'
+import { discoverTargets as cursorTargets }     from '../src/sources/cursor.mjs'
 
 // ── Package metadata ──────────────────────────────────────────────────────────
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
@@ -150,7 +152,8 @@ process.exit(totalFindings > 0 && !noFail ? 1 : 0)
 function gatherTargets(filter) {
   const all = [
     ...claudeCodeTargets(),
-    // codex and cursor adapters added in v0.2
+    ...codexTargets(),
+    ...cursorTargets(),
   ]
   if (!filter.length) return all
   return all.filter(t => filter.includes(t.source))
@@ -168,7 +171,8 @@ USAGE
   broom --version
 
 OPTIONS
-  --source <id>       Restrict to one source (repeatable): claude-code
+  --source <id>       Restrict to one source (repeatable):
+                      claude-code | codex | cursor
   --apply             Perform redaction (clean only; dry-run without it)
   --backup-dir <dir>  Where to write backups (default: ~/.broom/backups/<ts>/)
   --no-backup         Skip backup — strongly discouraged
