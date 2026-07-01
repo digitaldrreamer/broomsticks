@@ -16,6 +16,7 @@ import { discoverTargets as claudeCodeTargets } from '../src/sources/claude-code
 import { discoverTargets as codexTargets }      from '../src/sources/codex.mjs'
 import { discoverTargets as cursorTargets }     from '../src/sources/cursor.mjs'
 import { runInstall, isInstalled }              from '../src/install.mjs'
+import { startProxy, installProxyEnv }          from '../src/proxy.mjs'
 
 // ── Package metadata ──────────────────────────────────────────────────────────
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
@@ -46,7 +47,7 @@ if (flag('--version') || flag('-v')) { console.log(pkg.version); process.exit(0)
 if (flag('--help')    || flag('-h') || argv.length === 0) { printHelp(); process.exit(0) }
 
 const command = argv[0]
-if (!['scan', 'clean', 'sources', 'install'].includes(command)) {
+if (!['scan', 'clean', 'sources', 'install', 'proxy'].includes(command)) {
   console.error(`broom: unknown command '${command}'. Try 'broom --help'.`)
   process.exit(1)
 }
@@ -55,6 +56,46 @@ if (!['scan', 'clean', 'sources', 'install'].includes(command)) {
 if (command === 'install') {
   await runInstall({ yes: flag('--yes') })
   process.exit(0)
+}
+
+// ── `broom proxy` ────────────────────────────────────────────────────────────
+if (command === 'proxy') {
+  const port    = parseInt(option('--port') ?? '7777', 10)
+  const verbose = flag('--verbose')
+
+  if (flag('--install')) {
+    const updated = installProxyEnv(port)
+    if (updated.length === 0) {
+      console.log('\n  broom proxy: env vars already present in all shell init files.\n')
+    } else {
+      console.log('\n  broom proxy: added env vars to:')
+      for (const f of updated) console.log(`    ${f}`)
+      console.log(`\n  Open a new terminal (or run: source ~/.zshrc) then start the proxy:\n`)
+      console.log(`    broom proxy\n`)
+    }
+    process.exit(0)
+  }
+
+  const server = await startProxy({ port, verbose, allowlistFile: option('--allowlist') })
+  console.log(`
+  broom proxy  listening on http://127.0.0.1:${port}
+
+  Point your AI tools at this proxy:
+    export ANTHROPIC_BASE_URL=http://127.0.0.1:${port}
+    export OPENAI_BASE_URL=http://127.0.0.1:${port}
+
+  Or run \`broom proxy --install\` to add these permanently to your shell.
+
+  Routes:
+    POST /v1/messages           → api.anthropic.com  (Claude Code, Aider)
+    POST /v1/chat/completions   → api.openai.com     (Codex, OpenAI-compatible)
+
+  Press Ctrl-C to stop.
+`)
+
+  process.on('SIGINT',  () => { server.close(); process.exit(0) })
+  process.on('SIGTERM', () => { server.close(); process.exit(0) })
+  // Server holds the event loop open — no further code needed
 }
 
 // ── Shared options ────────────────────────────────────────────────────────────
@@ -191,6 +232,8 @@ USAGE
   broom clean  --apply [options]  redact in place — backs up first
   broom sources                   list discovered transcript files
   broom install                   install Claude Code skill + Stop hook
+  broom proxy   [options]         start local redacting proxy for all AI tools
+  broom proxy   --install         add ANTHROPIC_BASE_URL / OPENAI_BASE_URL to shell
   broom --version
 
 OPTIONS
@@ -205,6 +248,8 @@ OPTIONS
   --no-allowlist      Disable allowlist suppression (report all findings)
   --json              Machine-readable JSON output
   --no-fail           Exit 0 even when secrets are found (CI override)
+  --port <n>          Proxy port (default: 7777)
+  --verbose           Log redaction counts to stderr (proxy only)
   --yes               Skip confirmation prompts (install only)
   --help, -h          Show this help
   --version, -v       Print version
