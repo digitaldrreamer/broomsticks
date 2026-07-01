@@ -243,7 +243,10 @@ export const RULES = [
     id: 'generic-secret',
     title: 'Generic secret assignment',
     severity: 'medium',
-    pattern: /(?:api[_\-.]?key|api[_\-.]?secret|auth[_\-.]?token|access[_\-.]?token|secret[_\-.]?key|private[_\-.]?key|client[_\-.]?secret|password|passwd|token|credential)\s*[:=]\s*["']?([A-Za-z0-9+/=_\-]{16,})["']?/gid,
+    // Value charset includes common password special chars (!@#$%^&*) in addition
+    // to base64url chars so we catch real passwords, not just token-shaped strings.
+    // The entropy gate (≥3.5 bits/char) prevents false positives on phrases and UUIDs.
+    pattern: /(?:api[_\-.]?key|api[_\-.]?secret|auth[_\-.]?token|access[_\-.]?token|secret[_\-.]?key|private[_\-.]?key|client[_\-.]?secret|password|passwd|token|credential)\s*[:=]\s*["']?([A-Za-z0-9+/=_\-!@#$%^&*]{16,})["']?/gid,
     secretGroup: 1,
     entropy: 3.5,
   },
