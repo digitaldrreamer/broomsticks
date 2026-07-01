@@ -11,9 +11,11 @@ import { scanText }         from '../src/detector.mjs'
 import { redactText }       from '../src/redactor.mjs'
 import { BackupSession }    from '../src/backup.mjs'
 import { printReport, printJsonReport } from '../src/report.mjs'
+import { loadAllowlist, isAllowlisted } from '../src/allowlist.mjs'
 import { discoverTargets as claudeCodeTargets } from '../src/sources/claude-code.mjs'
 import { discoverTargets as codexTargets }      from '../src/sources/codex.mjs'
 import { discoverTargets as cursorTargets }     from '../src/sources/cursor.mjs'
+import { runInstall, isInstalled }              from '../src/install.mjs'
 
 // ── Package metadata ──────────────────────────────────────────────────────────
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
@@ -44,19 +46,27 @@ if (flag('--version') || flag('-v')) { console.log(pkg.version); process.exit(0)
 if (flag('--help')    || flag('-h') || argv.length === 0) { printHelp(); process.exit(0) }
 
 const command = argv[0]
-if (!['scan', 'clean', 'sources'].includes(command)) {
+if (!['scan', 'clean', 'sources', 'install'].includes(command)) {
   console.error(`broom: unknown command '${command}'. Try 'broom --help'.`)
   process.exit(1)
 }
 
+// ── `broom install` ───────────────────────────────────────────────────────────
+if (command === 'install') {
+  await runInstall({ yes: flag('--yes') })
+  process.exit(0)
+}
+
 // ── Shared options ────────────────────────────────────────────────────────────
-const sources   = options('--source')         // [] means all
-const extraFile = option('--extra')
-const jsonOut   = flag('--json')
-const noFail    = flag('--no-fail')
-const apply     = flag('--apply')
-const backupDir = option('--backup-dir')
-const noBackup  = flag('--no-backup')
+const sources      = options('--source')         // [] means all
+const extraFile    = option('--extra')
+const allowFile    = option('--allowlist')
+const jsonOut      = flag('--json')
+const noFail       = flag('--no-fail')
+const apply        = flag('--apply')
+const backupDir    = option('--backup-dir')
+const noBackup     = flag('--no-backup')
+const noAllowlist  = flag('--no-allowlist')
 
 // ── Load extra secrets from --extra file ──────────────────────────────────────
 let extras = []
@@ -67,6 +77,15 @@ if (extraFile) {
     console.error(`broom: cannot read --extra file '${extraFile}': ${e.message}`)
     process.exit(1)
   }
+}
+
+// ── Load allowlist ────────────────────────────────────────────────────────────
+const allowlist = noAllowlist ? null : loadAllowlist(allowFile)
+
+// ── First-run nudge (scan/clean only, TTY only, not yet installed) ────────────
+if (!isInstalled() && process.stdout.isTTY && !jsonOut) {
+  console.log('\n  Tip: run `broom install` to add a Claude Code skill + Stop hook that')
+  console.log('  automatically sweeps secrets after each Claude turn.\n')
 }
 
 // ── `broom sources` ───────────────────────────────────────────────────────────
@@ -109,7 +128,10 @@ for (const target of targets) {
     continue
   }
 
-  const findings = scanText(text, RULES, extras)
+  const raw      = scanText(text, RULES, extras)
+  const findings = allowlist
+    ? raw.filter(f => !isAllowlisted(f.secret, allowlist))
+    : raw
 
   let applied = 0
 
@@ -168,6 +190,7 @@ USAGE
   broom clean  [options]          preview redactions (dry-run by default)
   broom clean  --apply [options]  redact in place — backs up first
   broom sources                   list discovered transcript files
+  broom install                   install Claude Code skill + Stop hook
   broom --version
 
 OPTIONS
@@ -178,8 +201,11 @@ OPTIONS
   --no-backup         Skip backup — strongly discouraged
   --extra <file>      File of additional secrets to redact (one per line,
                       plain strings or /regex/flags)
+  --allowlist <file>  Custom allowlist file (default: ~/.broom/allowlist.txt)
+  --no-allowlist      Disable allowlist suppression (report all findings)
   --json              Machine-readable JSON output
   --no-fail           Exit 0 even when secrets are found (CI override)
+  --yes               Skip confirmation prompts (install only)
   --help, -h          Show this help
   --version, -v       Print version
 
@@ -188,5 +214,6 @@ EXAMPLES
   broom scan --source claude-code --json | jq '.totalFindings'
   broom clean --apply
   broom clean --apply --extra ./leaked-keys.txt
+  broom install
 `)
 }

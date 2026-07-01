@@ -9,6 +9,8 @@
   },
   "files": [
     "bin",
+    "src",
+    "skills",
     "README.md",
     "PLAN.md",
     "LICENSE"
