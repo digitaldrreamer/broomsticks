@@ -16,7 +16,7 @@ import { discoverTargets as claudeCodeTargets } from '../src/sources/claude-code
 import { discoverTargets as codexTargets }      from '../src/sources/codex.mjs'
 import { discoverTargets as cursorTargets }     from '../src/sources/cursor.mjs'
 import { runInstall, isInstalled }              from '../src/install.mjs'
-import { startProxy, installProxyEnv }          from '../src/proxy.mjs'
+import { startProxy, installProxyEnv, installDaemon, uninstallDaemon } from '../src/proxy.mjs'
 
 // ── Package metadata ──────────────────────────────────────────────────────────
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
@@ -63,6 +63,15 @@ if (command === 'proxy') {
   const port    = parseInt(option('--port') ?? '7777', 10)
   const verbose = flag('--verbose')
 
+  if (flag('--uninstall')) {
+    const removed = uninstallDaemon()
+    console.log(removed
+      ? '\n  broom proxy: daemon removed. Env vars in your shell profile still point to\n  the proxy — remove them manually or they will silently fail to connect.\n'
+      : '\n  broom proxy: no daemon found to remove.\n'
+    )
+    process.exit(0)
+  }
+
   if (flag('--install')) {
     const updated = installProxyEnv(port)
     if (updated.length === 0) {
@@ -70,8 +79,28 @@ if (command === 'proxy') {
     } else {
       console.log('\n  broom proxy: added env vars to:')
       for (const f of updated) console.log(`    ${f}`)
-      console.log(`\n  Open a new terminal (or run: source ~/.zshrc) then start the proxy:\n`)
-      console.log(`    broom proxy\n`)
+    }
+
+    if (flag('--daemon')) {
+      try {
+        const { path, platform } = installDaemon({
+          port,
+          nodeBin:  process.execPath,
+          broomBin: process.argv[1],
+        })
+        console.log(`\n  broom proxy: daemon installed (${platform})`)
+        console.log(`    ${path}`)
+        console.log('\n  The proxy will start automatically at login and restart on failure.')
+        console.log('  Logs: ~/.broom/proxy.log')
+        console.log('  To remove: broom proxy --uninstall\n')
+      } catch (err) {
+        console.error('\n  broom proxy --daemon failed:', err.message)
+        console.error('  Start the proxy manually: broom proxy\n')
+        process.exit(1)
+      }
+    } else {
+      console.log(`\n  Open a new terminal (or: source ~/.zshrc) then run:\n    broom proxy\n`)
+      console.log(`  To start automatically at login:\n    broom proxy --install --daemon\n`)
     }
     process.exit(0)
   }
@@ -234,6 +263,8 @@ USAGE
   broom install                   install Claude Code skill + Stop hook
   broom proxy   [options]         start local redacting proxy for all AI tools
   broom proxy   --install         add ANTHROPIC_BASE_URL / OPENAI_BASE_URL to shell
+  broom proxy   --install --daemon  also register as a login-persistent daemon
+  broom proxy   --uninstall       remove the daemon (macOS / Linux)
   broom --version
 
 OPTIONS

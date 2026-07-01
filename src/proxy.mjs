@@ -18,9 +18,10 @@
 import { createServer }        from 'node:http'
 import { request as tlsReq }  from 'node:https'
 import { createHash }          from 'node:crypto'
-import { existsSync, readFileSync, appendFileSync } from 'node:fs'
-import { homedir }             from 'node:os'
-import { join }                from 'node:path'
+import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
+import { homedir }                      from 'node:os'
+import { join, dirname }               from 'node:path'
+import { execFileSync }                from 'node:child_process'
 
 import { RULES }                         from './rules.mjs'
 import { scanText }                      from './detector.mjs'
@@ -286,6 +287,120 @@ export function installProxyEnv(port = 7777) {
   }
 
   return updated
+}
+
+// ── Daemon installation ───────────────────────────────────────────────────────
+
+function launchdPlist(nodeBin, broomBin, port) {
+  const logFile = join(homedir(), '.broom', 'proxy.log')
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.broomsticks.proxy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${nodeBin}</string>
+    <string>${broomBin}</string>
+    <string>proxy</string>
+    <string>--port</string>
+    <string>${port}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${logFile}</string>
+  <key>StandardErrorPath</key>
+  <string>${logFile}</string>
+</dict>
+</plist>
+`
+}
+
+function systemdService(nodeBin, broomBin, port) {
+  return `[Unit]
+Description=broomsticks secret-redacting proxy
+After=network.target
+
+[Service]
+ExecStart=${nodeBin} ${broomBin} proxy --port ${port}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+`
+}
+
+/**
+ * Install the proxy as a login-persistent daemon.
+ * - macOS  : ~/Library/LaunchAgents/com.broomsticks.proxy.plist  (launchd)
+ * - Linux  : ~/.config/systemd/user/broom-proxy.service          (systemd)
+ *
+ * @param {{ port?: number, nodeBin: string, broomBin: string }} opts
+ * @returns {{ path: string, platform: string, alreadyRunning: boolean }}
+ */
+export function installDaemon({ port = 7777, nodeBin, broomBin }) {
+  const home = homedir()
+  mkdirSync(join(home, '.broom'), { recursive: true })
+
+  if (process.platform === 'darwin') {
+    const agentsDir  = join(home, 'Library', 'LaunchAgents')
+    const plistPath  = join(agentsDir, 'com.broomsticks.proxy.plist')
+    mkdirSync(agentsDir, { recursive: true })
+    writeFileSync(plistPath, launchdPlist(nodeBin, broomBin, port), 'utf8')
+
+    // Unload first in case a stale copy is already registered
+    try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'ignore' }) } catch {}
+    execFileSync('launchctl', ['load', '-w', plistPath])
+
+    return { path: plistPath, platform: 'macos' }
+  }
+
+  if (process.platform === 'linux') {
+    const serviceDir  = join(home, '.config', 'systemd', 'user')
+    const servicePath = join(serviceDir, 'broom-proxy.service')
+    mkdirSync(serviceDir, { recursive: true })
+    writeFileSync(servicePath, systemdService(nodeBin, broomBin, port), 'utf8')
+
+    execFileSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' })
+    execFileSync('systemctl', ['--user', 'enable', 'broom-proxy'], { stdio: 'ignore' })
+    execFileSync('systemctl', ['--user', 'start',  'broom-proxy'], { stdio: 'ignore' })
+
+    return { path: servicePath, platform: 'linux' }
+  }
+
+  throw new Error(`Daemon installation is not supported on ${process.platform}. Run \`broom proxy\` manually or add it to your startup scripts.`)
+}
+
+/**
+ * Remove the daemon installed by installDaemon.
+ */
+export function uninstallDaemon() {
+  const home = homedir()
+
+  if (process.platform === 'darwin') {
+    const plistPath = join(home, 'Library', 'LaunchAgents', 'com.broomsticks.proxy.plist')
+    if (!existsSync(plistPath)) return false
+    try { execFileSync('launchctl', ['unload', plistPath], { stdio: 'ignore' }) } catch {}
+    try { unlinkSync(plistPath) } catch {}
+    return true
+  }
+
+  if (process.platform === 'linux') {
+    try { execFileSync('systemctl', ['--user', 'stop',    'broom-proxy'], { stdio: 'ignore' }) } catch {}
+    try { execFileSync('systemctl', ['--user', 'disable', 'broom-proxy'], { stdio: 'ignore' }) } catch {}
+    const servicePath = join(home, '.config', 'systemd', 'user', 'broom-proxy.service')
+    try { unlinkSync(servicePath) } catch {}
+    try { execFileSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' }) } catch {}
+    return true
+  }
+
+  return false
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
