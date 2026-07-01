@@ -169,7 +169,8 @@ export async function runInstall({ yes = false, silent = false } = {}) {
     entry.hooks?.some(h => typeof h.command === 'string' && h.command.includes('stop-broom'))
   )
   if (!alreadyWired) {
-    settings.hooks.Stop.push({ hooks: [{ type: 'command', command: hp }] })
+    const commandStr = process.platform === 'win32' ? `node "${hp}"` : hp
+    settings.hooks.Stop.push({ hooks: [{ type: 'command', command: commandStr }] })
     mkdirSync(dirname(sp2), { recursive: true })
     writeFileSync(sp2, JSON.stringify(settings, null, 2) + '\n', 'utf8')
     done.push(`updated   ${sp2}`)

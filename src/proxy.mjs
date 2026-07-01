@@ -94,6 +94,7 @@ function redactAnthropicSSE(lines, allowlist, vault) {
     const raw = line.slice(5).trim()
     if (!raw || raw === '[DONE]') continue
     let ev; try { ev = JSON.parse(raw) } catch { continue }
+    if (!ev || typeof ev !== 'object') continue
     if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
       const i = ev.index ?? 0
       accumulated.set(i, (accumulated.get(i) ?? '') + (ev.delta.text ?? ''))
@@ -134,6 +135,7 @@ function redactOpenAISSE(lines, allowlist, vault) {
     const raw = line.slice(5).trim()
     if (!raw || raw === '[DONE]') continue
     let ev; try { ev = JSON.parse(raw) } catch { continue }
+    if (!ev || typeof ev !== 'object') continue
     for (const c of ev.choices ?? []) {
       if (typeof c.delta?.content === 'string') {
         const i = c.index ?? 0
@@ -174,7 +176,8 @@ function forwardRequest(upstreamHost, req, body) {
   return new Promise((resolve, reject) => {
     const headers = { ...req.headers, host: upstreamHost }
     headers['content-length'] = String(body.length)
-    delete headers['accept-encoding']   // need plaintext to scan
+    delete headers['transfer-encoding']  // we send a single buffer, not chunked
+    delete headers['accept-encoding']    // need plaintext to scan
 
     const upReq = tlsReq(
       { host: upstreamHost, port: 443, path: req.url, method: req.method, headers },
@@ -246,7 +249,9 @@ async function handleRequest(req, res, allowlist, vault, verbose) {
   }
 
   // ── Write response ────────────────────────────────────────────────────────
-  const outHeaders = { ...upRes.headers, 'content-length': String(responseBody.length) }
+  const outHeaders = { ...upRes.headers }
+  delete outHeaders['transfer-encoding']   // we send a single buffer, not chunked
+  outHeaders['content-length'] = String(responseBody.length)
   res.writeHead(upRes.statusCode ?? 200, outHeaders)
   res.end(responseBody)
 }
@@ -280,10 +285,12 @@ export function installProxyEnv(port = 7777) {
   for (const name of PROFILE_CANDIDATES) {
     const file = join(home, name)
     if (!existsSync(file)) continue
-    const contents = readFileSync(file, 'utf8')
-    if (contents.includes(BROOM_MARKER)) continue   // already installed
-    appendFileSync(file, ENV_BLOCK(port), 'utf8')
-    updated.push(file)
+    try {
+      const contents = readFileSync(file, 'utf8')
+      if (contents.includes(BROOM_MARKER)) continue   // already installed
+      appendFileSync(file, ENV_BLOCK(port), 'utf8')
+      updated.push(file)
+    } catch { /* permission error or race — skip silently */ }
   }
 
   return updated
@@ -392,9 +399,10 @@ export function uninstallDaemon() {
   }
 
   if (process.platform === 'linux') {
+    const servicePath = join(home, '.config', 'systemd', 'user', 'broom-proxy.service')
+    if (!existsSync(servicePath)) return false
     try { execFileSync('systemctl', ['--user', 'stop',    'broom-proxy'], { stdio: 'ignore' }) } catch {}
     try { execFileSync('systemctl', ['--user', 'disable', 'broom-proxy'], { stdio: 'ignore' }) } catch {}
-    const servicePath = join(home, '.config', 'systemd', 'user', 'broom-proxy.service')
     try { unlinkSync(servicePath) } catch {}
     try { execFileSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'ignore' }) } catch {}
     return true

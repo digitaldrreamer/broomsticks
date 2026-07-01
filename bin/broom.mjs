@@ -60,7 +60,12 @@ if (command === 'install') {
 
 // ── `broom proxy` ────────────────────────────────────────────────────────────
 if (command === 'proxy') {
-  const port    = parseInt(option('--port') ?? '7777', 10)
+  const portStr = option('--port') ?? '7777'
+  const port    = parseInt(portStr, 10)
+  if (isNaN(port) || port < 1 || port > 65535) {
+    console.error(`broom: invalid port '${portStr}' — must be a number between 1 and 65535`)
+    process.exit(1)
+  }
   const verbose = flag('--verbose')
 
   if (flag('--uninstall')) {

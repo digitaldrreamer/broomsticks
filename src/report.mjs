@@ -98,18 +98,15 @@ export function printReport(results, opts = {}) {
     const bySev = Object.fromEntries(SEVERITY_ORDER.map(s => [s, []]))
     for (const f of findings) bySev[f.severity].push(f)
 
+    let targetText = null
+    try { targetText = target.read() } catch { /* non-blocking */ }
+
     for (const sev of SEVERITY_ORDER) {
       for (const f of bySev[sev]) {
-        const tag    = color(sev, `[${sev.padEnd(8)}]`)
-        const rule   = f.ruleId.padEnd(26)
-        const masked = maskSecret(f.secret)
-        // line number requires the raw text — pass it through target.read() lazily
-        // We cache it here since findings already came from scanning this target.
-        let lineInfo = ''
-        try {
-          const text = target.read()
-          lineInfo = dim(`  line ${lineNumber(text, f.start)}`)
-        } catch { /* non-blocking */ }
+        const tag      = color(sev, `[${sev.padEnd(8)}]`)
+        const rule     = f.ruleId.padEnd(26)
+        const masked   = maskSecret(f.secret)
+        const lineInfo = targetText !== null ? dim(`  line ${lineNumber(targetText, f.start)}`) : ''
         console.log(`    ${tag} ${dim(rule)} ${masked}${lineInfo}`)
       }
     }

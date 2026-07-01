@@ -69,7 +69,7 @@ function* walkVscdb(dir) {
 function readAiRows(dbPath) {
   let db
   try {
-    db = new DatabaseSync(dbPath, { open: true })
+    db = new DatabaseSync(dbPath, { open: true, readOnly: true })
   } catch {
     return []
   }
@@ -138,7 +138,7 @@ export function discoverTargets() {
 
         read() {
           // Re-open DB on each read so we always get the current value
-          const conn = new DatabaseSync(db, { open: true })
+          const conn = new DatabaseSync(db, { open: true, readOnly: true })
           try {
             const row = conn.prepare(`SELECT value FROM [${tbl}] WHERE key = ?`).get(k)
             if (!row) return ''
@@ -149,7 +149,7 @@ export function discoverTargets() {
         },
 
         write(text) {
-          const conn = new DatabaseSync(db, { open: true })
+          const conn = new DatabaseSync(db, { open: true, readOnly: true })
           try {
             conn.prepare(`UPDATE [${tbl}] SET value = ? WHERE key = ?`).run(text, k)
           } finally {
