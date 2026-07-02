@@ -124,6 +124,8 @@ broom proxy --install --daemon
 broom proxy --uninstall
 ```
 
+> **Note:** `--uninstall` removes the daemon but leaves the `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` lines in your shell profiles. Until you remove them, your AI tools will keep pointing at a proxy that's no longer running (connection refused). Delete those lines from `~/.zshrc` / `~/.bashrc` by hand after uninstalling.
+
 | Flag | Meaning |
 | --- | --- |
 | `--port <n>` | Port to listen on (default `7777`) |
@@ -148,6 +150,8 @@ This adds (with your confirmation):
 - a `Stop` hook entry in `~/.claude/settings.json` to register it
 
 Restart Claude Code afterward for the skill to take effect. Pass `--yes` to skip the confirmation prompt.
+
+> **Tip:** install broomsticks globally (`npm install -g broomsticks`) when using the automatic integration. The Stop hook prefers the `broom` command but falls back to `npx broomsticks`, which re-resolves the package on every turn and adds noticeable latency to each response.
 
 ## What it detects
 
@@ -205,6 +209,7 @@ Paths shown for Linux; macOS/Windows equivalents are resolved automatically.
 - `scan`/`clean` reduce exposure of secrets **already written to disk**; they cannot un-send anything already transmitted to a model provider. **If a secret hit a transcript before you started using the proxy, treat it as compromised and rotate it** — broomsticks is cleanup, not a substitute for rotation.
 - Detection is best-effort. Novel or low-entropy secrets may be missed; tune with `--extra`.
 - Cursor's schema evolves between versions; broomsticks targets the known chat/composer keys and will be kept current.
+- The proxy buffers each streaming response in full before redacting and re-emitting it. This is deliberate — a secret straddling two SSE chunks can't be caught otherwise — but it means the assistant's UI won't show tokens incrementally; long responses appear all at once after a pause. A sliding-window buffer that preserves incremental streaming is a possible future improvement.
 
 ## Contributing
 
