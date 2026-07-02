@@ -17,6 +17,7 @@ import { discoverTargets as codexTargets }      from '../src/sources/codex.mjs'
 import { discoverTargets as cursorTargets }     from '../src/sources/cursor.mjs'
 import { runInstall, isInstalled }              from '../src/install.mjs'
 import { startProxy, installProxyEnv, uninstallProxyEnv, installDaemon, uninstallDaemon } from '../src/proxy.mjs'
+import { confirm, select, isInteractive, closest } from '../src/ui.mjs'
 
 // ── Package metadata ──────────────────────────────────────────────────────────
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
@@ -44,11 +45,30 @@ function options(name) {
 
 // ── Top-level flags ───────────────────────────────────────────────────────────
 if (flag('--version') || flag('-v')) { console.log(pkg.version); process.exit(0) }
-if (flag('--help')    || flag('-h') || argv.length === 0) { printHelp(); process.exit(0) }
+if (flag('--help')    || flag('-h')) { printHelp(); process.exit(0) }
 
-const command = argv[0]
-if (!['scan', 'clean', 'sources', 'install', 'proxy'].includes(command)) {
-  console.error(`broom: unknown command '${command}'. Try 'broom --help'.`)
+const COMMANDS = ['scan', 'clean', 'sweep', 'sources', 'install', 'proxy']
+
+let command = argv[0]
+
+// No command: offer an interactive menu on a TTY, otherwise print help.
+if (!command) {
+  if (isInteractive()) {
+    command = await select('\n  What would you like to do?', [
+      { label: 'scan    — find secrets (read-only)',           value: 'scan'    },
+      { label: 'clean   — preview redactions (dry-run)',       value: 'clean'   },
+      { label: 'sweep   — redact secrets in place (backs up)', value: 'sweep'   },
+      { label: 'sources — list discovered transcript files',   value: 'sources' },
+    ])
+    if (!command) { console.log('\n  Nothing to do.\n'); process.exit(0) }
+  } else {
+    printHelp(); process.exit(0)
+  }
+}
+
+if (!COMMANDS.includes(command)) {
+  const hint = closest(command, COMMANDS)
+  console.error(`broom: unknown command '${command}'.${hint ? ` Did you mean '${hint}'?` : ''} Try 'broom --help'.`)
   process.exit(1)
 }
 
@@ -156,10 +176,11 @@ const extraFile    = option('--extra')
 const allowFile    = option('--allowlist')
 const jsonOut      = flag('--json')
 const noFail       = flag('--no-fail')
-const apply        = flag('--apply')
+const apply        = flag('--apply') || command === 'sweep'   // `sweep` = clean --apply
 const backupDir    = option('--backup-dir')
 const noBackup     = flag('--no-backup')
 const noAllowlist  = flag('--no-allowlist')
+const verbose      = flag('--verbose')
 
 // ── Load extra secrets from --extra file ──────────────────────────────────────
 let extras = []
@@ -207,7 +228,19 @@ if (targets.length === 0) {
   process.exit(noFail ? 0 : 1)
 }
 
-const isClean   = command === 'clean'
+const isClean   = command === 'clean' || command === 'sweep'
+
+// Confirm before writing, but only when interactive and not forced with --yes.
+// Non-interactive (pipes, CI) proceeds silently — running `sweep`/`--apply`
+// there is itself the consent.
+if (apply && !flag('--yes') && isInteractive()) {
+  const ok = await confirm(
+    `\n  Redact secrets in place across ${targets.length} discovered file(s)? Originals are backed up first.`,
+    false,
+  )
+  if (!ok) { console.log('\n  Aborted — nothing was written.\n'); process.exit(0) }
+}
+
 const backup    = (!noBackup && apply) ? new BackupSession(backupDir) : null
 
 const scanResults = []
@@ -251,7 +284,7 @@ if (backup) backup.writeManifest(scanResults)
 if (jsonOut) {
   printJsonReport(scanResults)
 } else {
-  printReport(scanResults, { clean: isClean, apply })
+  printReport(scanResults, { clean: isClean, apply, verbose })
 }
 
 const totalFindings = scanResults.reduce((n, r) => n + r.findings.length, 0)
@@ -279,8 +312,10 @@ function printHelp() {
 broomsticks v${pkg.version} — sweep secrets out of AI coding-assistant transcripts
 
 USAGE
+  broom                           interactive menu (on a terminal)
   broom scan   [options]          find secrets (read-only, exits 1 if found)
   broom clean  [options]          preview redactions (dry-run by default)
+  broom sweep  [options]          redact in place — backs up first (= clean --apply)
   broom clean  --apply [options]  redact in place — backs up first
   broom sources                   list discovered transcript files
   broom install                   install Claude Code skill + Stop hook
@@ -301,6 +336,7 @@ OPTIONS
   --allowlist <file>  Custom allowlist file (default: ~/.broom/allowlist.txt)
   --no-allowlist      Disable allowlist suppression (report all findings)
   --json              Machine-readable JSON output
+  --verbose           List every finding, not just per-file counts
   --no-fail           Exit 0 even when secrets are found (CI override)
   --port <n>          Proxy port (default: 7777)
   --verbose           Log redaction counts to stderr (proxy only)
