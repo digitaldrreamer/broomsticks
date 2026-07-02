@@ -9,12 +9,17 @@
   },
   "files": [
     "bin",
+    "src",
+    "skills",
     "README.md",
     "PLAN.md",
     "LICENSE"
   ],
+  "scripts": {
+    "test": "node --test"
+  },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.13.0"
   },
   "keywords": [
     "secrets",
