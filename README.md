@@ -93,7 +93,7 @@ broom clean --apply --extra ./leaked.txt
 
 ## Prevent: `broom proxy`
 
-Cleaning up after the fact only reduces exposure — the secret still reached the model. The proxy stops the leak at the source. It sits in front of the provider API and redacts secrets out of every outgoing request before it's sent, and out of every response the model echoes back.
+Cleaning up after the fact only reduces exposure — the secret still reached the model. The proxy stops the leak at the source. It sits in front of the provider API and redacts secrets out of the text and tool-call content in every outgoing request before it's sent, and out of every response the model echoes back.
 
 ```bash
 # Start the proxy in the foreground (Ctrl-C to stop)
@@ -109,7 +109,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:7777
 | `POST /v1/messages` | `api.anthropic.com` | Claude Code, Aider |
 | `POST /v1/chat/completions` | `api.openai.com` | Codex, OpenAI-compatible clients |
 
-Both streaming (SSE) and non-streaming responses are handled — a streaming response is buffered in full before redaction so a secret straddling two chunks can't slip through, then re-emitted as a valid SSE stream.
+Both streaming (SSE) and non-streaming responses are handled — a streaming response is buffered in full before redaction so a secret straddling two chunks can't slip through, then re-emitted as a valid SSE stream. Redaction covers both assistant **text** and **tool-call arguments** (e.g. a secret the model echoes into a `write_file` content or shell-command argument). Extended-thinking blocks are the one exception — see [Limitations](#limitations).
 
 Make it permanent instead of exporting vars by hand:
 
@@ -124,7 +124,7 @@ broom proxy --install --daemon
 broom proxy --uninstall
 ```
 
-> **Note:** `--uninstall` removes the daemon but leaves the `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` lines in your shell profiles. Until you remove them, your AI tools will keep pointing at a proxy that's no longer running (connection refused). Delete those lines from `~/.zshrc` / `~/.bashrc` by hand after uninstalling.
+> **Note:** `--uninstall` removes both the daemon **and** the `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` block it added to your shell profiles. Open a new terminal (or re-source your profile) afterward so your shell stops pointing at the now-stopped proxy.
 
 | Flag | Meaning |
 | --- | --- |
@@ -210,6 +210,7 @@ Paths shown for Linux; macOS/Windows equivalents are resolved automatically.
 - Detection is best-effort. Novel or low-entropy secrets may be missed; tune with `--extra`.
 - Cursor's schema evolves between versions; broomsticks targets the known chat/composer keys and will be kept current.
 - The proxy buffers each streaming response in full before redacting and re-emitting it. This is deliberate — a secret straddling two SSE chunks can't be caught otherwise — but it means the assistant's UI won't show tokens incrementally; long responses appear all at once after a pause. A sliding-window buffer that preserves incremental streaming is a possible future improvement.
+- The proxy scans assistant text and tool-call arguments, but **not extended-thinking blocks** — rewriting a thinking block would invalidate its cryptographic signature and break multi-turn thinking+tool loops. A secret echoed only inside a model's thinking is passed through unredacted. (Thinking is not persisted to transcripts either, so `broom clean` won't see it; if a secret reached the model at all, rotate it.)
 
 ## Contributing
 
