@@ -13,7 +13,9 @@
 // Both streaming (SSE) and non-streaming responses are handled. Streaming
 // responses are buffered in full before redaction — a secret that straddles
 // two SSE chunks cannot be safely found otherwise. The client receives a
-// valid synthetic SSE stream with collapsed text deltas.
+// valid synthetic SSE stream with collapsed deltas. Both assistant text and
+// tool-call argument JSON are scanned; extended-thinking blocks are passed
+// through untouched so their signatures stay valid.
 
 import { createServer }        from 'node:http'
 import { request as tlsReq }  from 'node:https'
@@ -83,26 +85,42 @@ function collect(stream) {
 
 // ── SSE redaction ─────────────────────────────────────────────────────────────
 //
-// Strategy: accumulate the full text for each content block index across all
+// Strategy: accumulate the full payload for each content block index across all
 // delta events, redact the complete string, then re-emit one synthetic delta
-// per block with the full redacted text. All non-delta events pass through.
+// per block with the full redacted payload. Both assistant text AND tool-call
+// argument JSON are scanned — a model can echo a leaked secret into a tool call
+// (e.g. a write_file `content` arg) just as easily as into prose.
+//
+// Anthropic emits each block's payload under a delta-type-specific field:
+//   text_delta       → delta.text          (assistant prose)
+//   input_json_delta → delta.partial_json  (streamed tool-use input JSON)
+// A block is exactly one type, so blockIndex → field is stable.
+//
+// thinking_delta / signature_delta are intentionally passed through untouched:
+// extended-thinking blocks are cryptographically signed, and rewriting the text
+// would invalidate the signature and break multi-turn thinking+tool loops.
+const ANTHROPIC_DELTA_FIELD = { text_delta: 'text', input_json_delta: 'partial_json' }
 
-function redactAnthropicSSE(lines, allowlist, vault) {
-  const accumulated = new Map()   // blockIndex → full text
+export function redactAnthropicSSE(lines, allowlist, vault) {
+  const acc = new Map()   // blockIndex → { field, content }
   for (const line of lines) {
     if (!line.startsWith('data:')) continue
     const raw = line.slice(5).trim()
     if (!raw || raw === '[DONE]') continue
     let ev; try { ev = JSON.parse(raw) } catch { continue }
     if (!ev || typeof ev !== 'object') continue
-    if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+    if (ev.type === 'content_block_delta') {
+      const field = ANTHROPIC_DELTA_FIELD[ev.delta?.type]
+      if (!field) continue
       const i = ev.index ?? 0
-      accumulated.set(i, (accumulated.get(i) ?? '') + (ev.delta.text ?? ''))
+      const prev = acc.get(i) ?? { field, content: '' }
+      prev.content += ev.delta[field] ?? ''
+      acc.set(i, prev)
     }
   }
 
   const redacted = new Map()
-  for (const [i, text] of accumulated) redacted.set(i, redactStr(text, allowlist, vault))
+  for (const [i, { content }] of acc) redacted.set(i, redactStr(content, allowlist, vault))
 
   const emitted = new Set()
   const out = []
@@ -112,15 +130,16 @@ function redactAnthropicSSE(lines, allowlist, vault) {
     if (!raw || raw === '[DONE]') { out.push(line); continue }
     let ev; try { ev = JSON.parse(raw) } catch { out.push(line); continue }
 
-    if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta') {
+    const field = ev.type === 'content_block_delta' && ANTHROPIC_DELTA_FIELD[ev.delta?.type]
+    if (field && acc.has(ev.index ?? 0)) {
       const i = ev.index ?? 0
       if (!emitted.has(i)) {
         emitted.add(i)
         out.push('data: ' + JSON.stringify({
-          ...ev, delta: { ...ev.delta, text: redacted.get(i) ?? '' },
+          ...ev, delta: { ...ev.delta, [field]: redacted.get(i) ?? '' },
         }))
       }
-      // drop subsequent deltas — text already emitted above
+      // drop subsequent deltas — full payload already emitted above
     } else {
       out.push(line)
     }
@@ -128,8 +147,14 @@ function redactAnthropicSSE(lines, allowlist, vault) {
   return out
 }
 
-function redactOpenAISSE(lines, allowlist, vault) {
-  const accumulated = new Map()   // choiceIndex → full content string
+// OpenAI streams assistant text under choices[].delta.content and tool-call
+// input under choices[].delta.tool_calls[].function.arguments (fragmented,
+// keyed by the tool_call's own `index`). Both carry secrets a model may echo,
+// so both are accumulated, redacted, and collapsed into their first occurrence.
+export function redactOpenAISSE(lines, allowlist, vault) {
+  const accText = new Map()   // choiceIndex          → content string
+  const accArgs = new Map()   // `${choiceIndex}:${toolIndex}` → arguments string
+
   for (const line of lines) {
     if (!line.startsWith('data:')) continue
     const raw = line.slice(5).trim()
@@ -137,17 +162,26 @@ function redactOpenAISSE(lines, allowlist, vault) {
     let ev; try { ev = JSON.parse(raw) } catch { continue }
     if (!ev || typeof ev !== 'object') continue
     for (const c of ev.choices ?? []) {
+      const ci = c.index ?? 0
       if (typeof c.delta?.content === 'string') {
-        const i = c.index ?? 0
-        accumulated.set(i, (accumulated.get(i) ?? '') + c.delta.content)
+        accText.set(ci, (accText.get(ci) ?? '') + c.delta.content)
+      }
+      for (const tc of c.delta?.tool_calls ?? []) {
+        if (typeof tc.function?.arguments === 'string') {
+          const key = `${ci}:${tc.index ?? 0}`
+          accArgs.set(key, (accArgs.get(key) ?? '') + tc.function.arguments)
+        }
       }
     }
   }
 
-  const redacted = new Map()
-  for (const [i, text] of accumulated) redacted.set(i, redactStr(text, allowlist, vault))
+  const redText = new Map()
+  for (const [k, v] of accText) redText.set(k, redactStr(v, allowlist, vault))
+  const redArgs = new Map()
+  for (const [k, v] of accArgs) redArgs.set(k, redactStr(v, allowlist, vault))
 
-  const emitted = new Set()
+  const emittedText = new Set()
+  const emittedArgs = new Set()
   const out = []
   for (const line of lines) {
     if (!line.startsWith('data:')) { out.push(line); continue }
@@ -155,15 +189,32 @@ function redactOpenAISSE(lines, allowlist, vault) {
     if (!raw || raw === '[DONE]') { out.push(line); continue }
     let ev; try { ev = JSON.parse(raw) } catch { out.push(line); continue }
 
-    const hasContent = (ev.choices ?? []).some(c => typeof c.delta?.content === 'string')
-    if (!hasContent) { out.push(line); continue }
+    const hasText = (ev.choices ?? []).some(c => typeof c.delta?.content === 'string')
+    const hasArgs = (ev.choices ?? []).some(c =>
+      (c.delta?.tool_calls ?? []).some(tc => typeof tc.function?.arguments === 'string'))
+    if (!hasText && !hasArgs) { out.push(line); continue }
 
     const newChoices = (ev.choices ?? []).map(c => {
-      if (typeof c.delta?.content !== 'string') return c
-      const i = c.index ?? 0
-      if (emitted.has(i)) return { ...c, delta: { ...c.delta, content: '' } }
-      emitted.add(i)
-      return { ...c, delta: { ...c.delta, content: redacted.get(i) ?? '' } }
+      const ci = c.index ?? 0
+      let delta = c.delta
+
+      if (typeof delta?.content === 'string') {
+        if (emittedText.has(ci)) delta = { ...delta, content: '' }
+        else { emittedText.add(ci); delta = { ...delta, content: redText.get(ci) ?? '' } }
+      }
+
+      if (Array.isArray(delta?.tool_calls)) {
+        const tcs = delta.tool_calls.map(tc => {
+          if (typeof tc.function?.arguments !== 'string') return tc
+          const key = `${ci}:${tc.index ?? 0}`
+          if (emittedArgs.has(key)) return { ...tc, function: { ...tc.function, arguments: '' } }
+          emittedArgs.add(key)
+          return { ...tc, function: { ...tc.function, arguments: redArgs.get(key) ?? '' } }
+        })
+        delta = { ...delta, tool_calls: tcs }
+      }
+
+      return { ...c, delta }
     })
     out.push('data: ' + JSON.stringify({ ...ev, choices: newChoices }))
   }
@@ -290,6 +341,41 @@ export function installProxyEnv(port = 7777) {
       if (contents.includes(BROOM_MARKER)) continue   // already installed
       appendFileSync(file, ENV_BLOCK(port), 'utf8')
       updated.push(file)
+    } catch { /* permission error or race — skip silently */ }
+  }
+
+  return updated
+}
+
+// Matches the whole block installProxyEnv appends: the marker line, the body,
+// and the closing rule line. The opening line has only two consecutive box
+// chars ("# ── broomsticks…"), so `# ─{3,}` reliably anchors to the closing
+// rule and never to the opener. A leading newline (added when the block is
+// appended) is consumed so uninstall restores the original file shape.
+const PROXY_BLOCK_RE = /\n?# ── broomsticks proxy[\s\S]*?\n# ─{3,}[^\n]*\n?/g
+
+/**
+ * Remove the proxy env-var block that installProxyEnv added. Inverse of
+ * installProxyEnv: strips the marked block from every shell init file that
+ * contains it, leaving the rest of the file untouched.
+ *
+ * @returns {string[]} paths that were updated
+ */
+export function uninstallProxyEnv() {
+  const home    = homedir()
+  const updated = []
+
+  for (const name of PROFILE_CANDIDATES) {
+    const file = join(home, name)
+    if (!existsSync(file)) continue
+    try {
+      const contents = readFileSync(file, 'utf8')
+      if (!contents.includes(BROOM_MARKER)) continue   // nothing to remove
+      const stripped = contents.replace(PROXY_BLOCK_RE, '')
+      if (stripped !== contents) {
+        writeFileSync(file, stripped, 'utf8')
+        updated.push(file)
+      }
     } catch { /* permission error or race — skip silently */ }
   }
 

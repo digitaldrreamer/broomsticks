@@ -16,7 +16,7 @@ import { discoverTargets as claudeCodeTargets } from '../src/sources/claude-code
 import { discoverTargets as codexTargets }      from '../src/sources/codex.mjs'
 import { discoverTargets as cursorTargets }     from '../src/sources/cursor.mjs'
 import { runInstall, isInstalled }              from '../src/install.mjs'
-import { startProxy, installProxyEnv, installDaemon, uninstallDaemon } from '../src/proxy.mjs'
+import { startProxy, installProxyEnv, uninstallProxyEnv, installDaemon, uninstallDaemon } from '../src/proxy.mjs'
 
 // ── Package metadata ──────────────────────────────────────────────────────────
 const pkgPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
@@ -70,10 +70,18 @@ if (command === 'proxy') {
 
   if (flag('--uninstall')) {
     const removed = uninstallDaemon()
+    const cleaned = uninstallProxyEnv()
     console.log(removed
-      ? '\n  broom proxy: daemon removed. Env vars in your shell profile still point to\n  the proxy — remove them manually or they will silently fail to connect.\n'
-      : '\n  broom proxy: no daemon found to remove.\n'
+      ? '\n  broom proxy: daemon removed.'
+      : '\n  broom proxy: no daemon found to remove.'
     )
+    if (cleaned.length) {
+      console.log('  Removed proxy env vars from:')
+      for (const f of cleaned) console.log(`    ${f}`)
+      console.log('  Open a new terminal (or re-source your profile) for it to take effect.\n')
+    } else {
+      console.log('  No proxy env vars found in your shell profiles.\n')
+    }
     process.exit(0)
   }
 
