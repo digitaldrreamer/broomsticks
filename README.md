@@ -116,8 +116,10 @@ broom proxy --install
 # Also register a login-persistent daemon (launchd on macOS, systemd --user on Linux)
 broom proxy --install --daemon
 
-# On a headless Linux box, allow the user daemon to run without an active login:
-#   loginctl enable-linger "$USER"
+# On a headless Linux box, allow the user daemon to run without an active login.
+# With no argument this enables lingering for the current user, which does not
+# require root/Polkit auth (naming a user does):
+#   loginctl enable-linger
 
 # Remove the daemon later
 broom proxy --uninstall
