@@ -1,6 +1,6 @@
 {
   "name": "broomsticks",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Sweep leaked secrets out of your AI coding-assistant chat transcripts (Claude Code, Codex, Cursor). Dry-run by default, backups before every write, zero runtime dependencies.",
   "type": "module",
   "bin": {
