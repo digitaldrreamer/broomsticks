@@ -62,3 +62,41 @@ test('cursor target read → redact → write persists the redaction', (t) => {
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+// Regression guard for the OOM: discovery must not bulk-load row values. A big
+// non-AI blob (Cursor stores embeddings/caches this way) sitting next to a small
+// AI row must be ignored by discovery — previously `SELECT key, value FROM …`
+// pulled every blob into memory at once and crashed on large databases.
+test('cursor discovery ignores large non-AI blobs and reads values lazily', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'broom-cursor-oom-'))
+  const prevHome = process.env.HOME
+  process.env.HOME = home
+
+  try {
+    const root = cursorUserRoot()
+    if (!root.startsWith(home)) return t.skip('os.homedir() does not honor $HOME here')
+
+    const storage = join(root, 'globalStorage')
+    mkdirSync(storage, { recursive: true })
+    const dbPath = join(storage, 'state.vscdb')
+
+    const bigBlob = 'x'.repeat(8 * 1024 * 1024) // 8 MB non-AI value
+
+    const db = new DatabaseSync(dbPath)
+    db.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)')
+    const ins = db.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)')
+    ins.run('workbench.embeddings.cache', bigBlob)      // non-AI: must be skipped
+    ins.run('history.entries', bigBlob)                 // non-AI: must be skipped
+    ins.run('composer.chat', `msg ${SECRET} msg`)       // AI: must be discovered
+    db.close()
+
+    const targets = discoverTargets()
+    assert.equal(targets.length, 1, 'only the AI row is discovered, not the blobs')
+    assert.equal(targets[0].label.endsWith(':composer.chat'), true)
+    assert.ok(targets[0].read().includes(SECRET), 'value is fetched lazily on read')
+  } finally {
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})

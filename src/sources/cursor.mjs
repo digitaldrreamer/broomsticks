@@ -60,13 +60,20 @@ function* walkVscdb(dir) {
 }
 
 /**
- * Open a SQLite database read-only and return all AI-related rows from the
- * known tables. Returns [] if the DB is unreadable or has no matching tables.
+ * Open a SQLite database read-only and return the AI-related (table, key) pairs
+ * from the known tables. Returns [] if the DB is unreadable or has no matching
+ * tables.
+ *
+ * Only the `key` column is selected here — never `value`. Cursor's tables can
+ * hold gigabytes of blobs (embeddings, file caches), so `SELECT key, value …`
+ * across a whole table loads every blob into memory at once and OOMs the
+ * process. Each row's value is fetched lazily, one at a time, in the Target's
+ * `read()`, so discovery only needs the (small) keys.
  *
  * @param {string} dbPath
- * @returns {Array<{table:string, key:string, value:string}>}
+ * @returns {Array<{table:string, key:string}>}
  */
-function readAiRows(dbPath) {
+function readAiKeys(dbPath) {
   let db
   try {
     db = new DatabaseSync(dbPath, { open: true, readOnly: true })
@@ -74,7 +81,7 @@ function readAiRows(dbPath) {
     return []
   }
 
-  const rows = []
+  const keys = []
 
   // Check which tables actually exist before querying
   let existingTables
@@ -92,14 +99,10 @@ function readAiRows(dbPath) {
   for (const table of TABLES) {
     if (!existingTables.has(table)) continue
     try {
-      const all = db.prepare(`SELECT key, value FROM [${table}]`).all()
-      for (const row of all) {
+      // key-only projection; values are never materialised in bulk (see above)
+      for (const row of db.prepare(`SELECT key FROM [${table}]`).all()) {
         if (typeof row.key === 'string' && AI_KEY_RE.test(row.key)) {
-          // value may be stored as Buffer (BLOB) or string — normalise to string
-          const value = Buffer.isBuffer(row.value)
-            ? row.value.toString('utf8')
-            : String(row.value ?? '')
-          rows.push({ table, key: row.key, value })
+          keys.push({ table, key: row.key })
         }
       }
     } catch {
@@ -108,7 +111,7 @@ function readAiRows(dbPath) {
   }
 
   db.close()
-  return rows
+  return keys
 }
 
 /**
@@ -123,9 +126,7 @@ export function discoverTargets() {
   const targets  = []
 
   for (const dbPath of walkVscdb(userRoot)) {
-    const rows = readAiRows(dbPath)
-
-    for (const { table, key, value } of rows) {
+    for (const { table, key } of readAiKeys(dbPath)) {
       // Capture loop vars in closure-safe consts
       const db   = dbPath
       const tbl  = table
