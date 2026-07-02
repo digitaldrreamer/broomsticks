@@ -91,7 +91,8 @@ export function printReport(results, opts = {}) {
   const dirty = results.filter(r => r.findings.length > 0)
 
   for (const { target, findings } of dirty) {
-    const shortLabel = target.label.replace(process.env.HOME ?? '', '~')
+    const home = process.env.HOME || process.env.USERPROFILE
+    const shortLabel = home ? target.label.replace(home, '~') : target.label
     console.log(`  ${bold(target.source)}  ${shortLabel}`)
 
     // Group by severity for ordered display

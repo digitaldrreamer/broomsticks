@@ -110,7 +110,13 @@ if (command === 'proxy') {
     process.exit(0)
   }
 
-  const server = await startProxy({ port, verbose, allowlistFile: option('--allowlist') })
+  let server
+  try {
+    server = await startProxy({ port, verbose, allowlistFile: option('--allowlist') })
+  } catch (err) {
+    console.error(`broom: failed to start proxy on port ${port}: ${err.message}`)
+    process.exit(1)
+  }
   console.log(`
   broom proxy  listening on http://127.0.0.1:${port}
 
@@ -129,7 +135,11 @@ if (command === 'proxy') {
 
   process.on('SIGINT',  () => { server.close(); process.exit(0) })
   process.on('SIGTERM', () => { server.close(); process.exit(0) })
-  // Server holds the event loop open — no further code needed
+
+  // The proxy owns the process from here. Block the module's top-level
+  // evaluation forever so execution never falls through into the scan/clean
+  // logic below (which would run a scan and exit, killing the proxy).
+  await new Promise(() => {})
 }
 
 // ── Shared options ────────────────────────────────────────────────────────────

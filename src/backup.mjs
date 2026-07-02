@@ -12,7 +12,7 @@
 
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 /**
  * A single backup session. Create one per `broom clean --apply` run.
@@ -88,9 +88,12 @@ export class BackupSession {
 
   /** @param {string} abs  Absolute original path */
   _destPath(abs) {
-    // Strip leading separator so we can join under the backup dir.
-    // /home/alice/.claude/... → home/alice/.claude/...
-    const relative = abs.startsWith(sep) ? abs.slice(sep.length) : abs
+    // Strip the leading separator (POSIX) or drive letter + separators
+    // (Windows) so we can join under the backup dir. A retained `C:` would
+    // otherwise produce an invalid mid-path colon and fail with EINVAL/ENOENT.
+    //   /home/alice/.claude/...  → home/alice/.claude/...
+    //   C:\Users\alice\...       → Users\alice\...
+    const relative = abs.replace(/^[a-zA-Z]:/, '').replace(/^[\\/]+/, '')
     return join(this.dir, relative)
   }
 }

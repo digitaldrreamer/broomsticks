@@ -31,7 +31,7 @@ export function scanText(text, rules, extras = []) {
       const secret = match[grp] ?? match[0]
       if (!secret) continue
 
-      const indices = match.indices[grp] ?? match.indices[0]
+      const indices = match.indices?.[grp] ?? match.indices?.[0]
       if (!indices) continue
       const [start, end] = indices
 

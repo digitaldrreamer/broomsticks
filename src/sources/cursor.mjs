@@ -149,7 +149,9 @@ export function discoverTargets() {
         },
 
         write(text) {
-          const conn = new DatabaseSync(db, { open: true, readOnly: true })
+          // Read-write handle — an UPDATE against a readOnly connection throws
+          // "attempt to write a readonly database".
+          const conn = new DatabaseSync(db, { open: true, readOnly: false })
           try {
             conn.prepare(`UPDATE [${tbl}] SET value = ? WHERE key = ?`).run(text, k)
           } finally {

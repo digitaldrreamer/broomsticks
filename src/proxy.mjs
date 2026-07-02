@@ -300,6 +300,9 @@ export function installProxyEnv(port = 7777) {
 
 function launchdPlist(nodeBin, broomBin, port) {
   const logFile = join(homedir(), '.broom', 'proxy.log')
+  // Escape XML metacharacters — a path like /Users/bob&alice would otherwise
+  // produce a malformed plist that launchd refuses to load.
+  const esc = (s) => String(s).replace(/[<>&]/g, m => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[m]))
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -309,20 +312,20 @@ function launchdPlist(nodeBin, broomBin, port) {
   <string>com.broomsticks.proxy</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${nodeBin}</string>
-    <string>${broomBin}</string>
+    <string>${esc(nodeBin)}</string>
+    <string>${esc(broomBin)}</string>
     <string>proxy</string>
     <string>--port</string>
-    <string>${port}</string>
+    <string>${esc(port)}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>${logFile}</string>
+  <string>${esc(logFile)}</string>
   <key>StandardErrorPath</key>
-  <string>${logFile}</string>
+  <string>${esc(logFile)}</string>
 </dict>
 </plist>
 `
@@ -334,7 +337,7 @@ Description=broomsticks secret-redacting proxy
 After=network.target
 
 [Service]
-ExecStart=${nodeBin} ${broomBin} proxy --port ${port}
+ExecStart="${nodeBin}" "${broomBin}" proxy --port ${port}
 Restart=on-failure
 RestartSec=5
 

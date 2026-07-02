@@ -15,6 +15,9 @@
     "PLAN.md",
     "LICENSE"
   ],
+  "scripts": {
+    "test": "node --test"
+  },
   "engines": {
     "node": ">=22.5.0"
   },
