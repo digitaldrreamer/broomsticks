@@ -99,8 +99,9 @@ function readAiKeys(dbPath) {
   for (const table of TABLES) {
     if (!existingTables.has(table)) continue
     try {
-      // key-only projection; values are never materialised in bulk (see above)
-      for (const row of db.prepare(`SELECT key FROM [${table}]`).all()) {
+      // key-only projection, streamed via iterate() so we never materialise the
+      // full key array either (values are never loaded in bulk — see above)
+      for (const row of db.prepare(`SELECT key FROM [${table}]`).iterate()) {
         if (typeof row.key === 'string' && AI_KEY_RE.test(row.key)) {
           keys.push({ table, key: row.key })
         }
