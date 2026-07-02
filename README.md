@@ -6,7 +6,7 @@
 [![node](https://img.shields.io/node/v/broomsticks.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/broomsticks.svg)](./LICENSE)
 
-> **Status: early access.** The scanner, redactor, source adapters (Claude Code, Codex, Cursor), allowlist, Claude Code hook installer, and the live redacting proxy are all implemented and covered by tests. Being finalized for the `v0.1` npm release — until then, install from git. Watch the repo.
+> **Status: v0.1 — first public release.** The scanner, redactor, source adapters (Claude Code, Codex, Cursor), allowlist, Claude Code hook installer, and the live redacting proxy are all implemented and covered by tests. Feedback and issues welcome.
 
 ---
 
@@ -37,16 +37,12 @@ Those transcripts then live on disk indefinitely — `~/.claude/projects/**/*.js
 ## Install
 
 ```bash
-# one-off, no install (once published)
+# one-off, no install
 npx broomsticks scan
 
 # or install the CLI globally
 npm install -g broomsticks
 broom scan
-
-# from git, before the npm release
-git clone https://github.com/digitaldrreamer/broomsticks
-npm install -g ./broomsticks
 ```
 
 Requires **Node ≥ 22.13** — it uses the built-in `node:sqlite` to read Cursor's database (no native modules), which is available without the `--experimental-sqlite` flag as of Node 22.13.0.
@@ -119,6 +115,11 @@ broom proxy --install
 
 # Also register a login-persistent daemon (launchd on macOS, systemd --user on Linux)
 broom proxy --install --daemon
+
+# On a headless Linux box, allow the user daemon to run without an active login.
+# With no argument this enables lingering for the current user, which typically
+# does not require root privileges if Polkit is configured to allow self-lingering:
+#   loginctl enable-linger
 
 # Remove the daemon later
 broom proxy --uninstall
