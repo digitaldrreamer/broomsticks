@@ -65,6 +65,46 @@ test('scan → clean --apply → re-scan lifecycle', () => {
   }
 })
 
+test('sweep redacts in place like clean --apply', () => {
+  const { home, file } = makeHome()
+  try {
+    const res = run(['sweep', '--source', 'claude-code'], home)
+    assert.equal(res.status, 1, 'findings existed → exit 1')
+    const redacted = readFileSync(file, 'utf8')
+    assert.ok(!redacted.includes(SECRET), 'secret must be gone')
+    assert.ok(redacted.includes('«BROOM:github-pat:'), 'placeholder written')
+    assert.match(res.stdout, /redacted in place/i)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('default report is a compact summary; --verbose lists findings', () => {
+  const { home } = makeHome()
+  try {
+    const summary = run(['scan', '--source', 'claude-code'], home)
+    // Compact mode shows a per-file count + severity summary, not finding lines.
+    assert.match(summary.stdout, /secret.*found across/i)
+    assert.doesNotMatch(summary.stdout, /\[high\s*\]|\[critical\s*\]/, 'no per-finding rows by default')
+
+    const verbose = run(['scan', '--source', 'claude-code', '--verbose'], home)
+    assert.match(verbose.stdout, /\bgithub-pat\b/, 'verbose lists the rule per finding')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('unknown command suggests the closest match', () => {
+  const { home } = makeHome()
+  try {
+    const res = run(['sacn'], home)
+    assert.equal(res.status, 1)
+    assert.match(res.stderr, /did you mean 'scan'/i)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test('invalid --port is rejected', () => {
   const { home } = makeHome()
   try {

@@ -14,10 +14,12 @@ broomsticks does two things: it **cleans** secrets already sitting in your local
 # scan every transcript for secrets (read-only)
 npx broomsticks scan
 
-# preview redactions, then apply them (each touched file is backed up first)
+# preview redactions, then sweep them away (each touched file is backed up first)
 npx broomsticks clean
-npx broomsticks clean --apply
+npx broomsticks sweep
 ```
+
+Run `broom` with no arguments in a terminal for an interactive menu.
 
 Prefer a global command? `npm install -g broomsticks` gives you `broom` (used throughout this README). Requires **Node ≥ 22.13** — it reads Cursor's SQLite store with the built-in `node:sqlite`, unflagged as of 22.13.0, so there are no native modules to build.
 
@@ -41,15 +43,20 @@ broom scan                              # report secrets; exits 1 if any (CI-fri
 broom scan --source cursor              # limit to one source (repeatable)
 broom sources                           # list discovered transcript files
 broom clean                             # preview redactions (dry-run)
-broom clean --apply                     # redact in place, backing up first
+broom sweep                             # redact in place, backing up first (= clean --apply)
+broom scan --verbose                    # list every finding, not just per-file counts
 broom scan --json                       # machine-readable output
-broom clean --apply --extra ./leaked.txt   # also scrub your own known values
+broom sweep --extra ./leaked.txt        # also scrub your own known values
 ```
+
+By default the report is a compact summary — grouped by AI client, showing how many chats are affected and how many **distinct** secrets are exposed (the same key echoed many times across a transcript counts once; the total occurrence count is shown alongside). Add `--verbose` to list every occurrence with its rule and line. Colour is used on a terminal and disabled automatically when piped or when `NO_COLOR` is set. `sweep` (and `clean --apply`) asks for confirmation on a terminal; pass `--yes` to skip it, and in a pipe/CI it proceeds without prompting.
 
 | Flag | Meaning |
 | --- | --- |
 | `--source <id>` | Restrict to `claude-code`, `codex`, or `cursor` (repeatable; default: all) |
-| `--apply` | Perform redaction (`clean` only; otherwise dry-run) |
+| `--apply` | Perform redaction (`clean` only; `sweep` implies it) |
+| `--yes` | Skip the pre-redaction confirmation prompt |
+| `--verbose` | List every finding, not just per-file counts |
 | `--backup-dir <dir>` | Where backups go (default `~/.broom/backups/<timestamp>/`) |
 | `--no-backup` | Skip backups (discouraged) |
 | `--extra <file>` | Extra literal / `/regex/` secrets to redact, one per line |
