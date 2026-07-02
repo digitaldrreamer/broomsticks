@@ -1,0 +1,39 @@
+name: release
+
+# Publishes to npm with build provenance whenever a v* tag is pushed.
+# Cut a release with:  npm version <patch|minor|major> && git push --follow-tags
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write   # required for npm provenance (--provenance)
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Gate the publish on a green test run (also enforced by prepublishOnly).
+      - run: node --test
+
+      # Guard: the pushed tag must match the package.json version, so a stray
+      # tag can never publish the wrong version.
+      - name: Verify tag matches package version
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

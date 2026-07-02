@@ -1,0 +1,5 @@
+# Code owners for broomsticks.
+# Every change to any path requires review/approval from the maintainer before
+# it can be merged into a protected branch (enforced via branch protection's
+# "Require review from Code Owners" rule).
+* @digitaldrreamer
