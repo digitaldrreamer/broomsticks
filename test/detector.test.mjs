@@ -78,6 +78,7 @@ test('overlapping matches resolve to a single non-nested finding', () => {
   // exactly one finding covering the URL, not two overlapping spans.
   const text = 'DATABASE_URL=postgres://admin:s3cr3tP4ssword@db.host:5432/app'
   const findings = scanText(text, RULES)
+  assert.ok(findings.length > 0, 'expected at least one finding for this db-url text')
   for (let i = 0; i < findings.length; i++) {
     for (let j = i + 1; j < findings.length; j++) {
       const a = findings[i], b = findings[j]
