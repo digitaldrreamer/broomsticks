@@ -122,7 +122,9 @@ export function printReport(results, opts = {}) {
     for (const { target, findings } of dirty) {
       console.log(`  ${bold(SOURCE_NAME[target.source] ?? target.source)}  ${shorten(target.label)}`)
       const bySev = Object.fromEntries(SEVERITY_ORDER.map(s => [s, []]))
-      for (const f of findings) bySev[f.severity].push(f)
+      // Defensive: a finding with an unknown severity is bucketed under the
+      // lowest level rather than crashing (rules only emit known severities).
+      for (const f of findings) (bySev[f.severity] ?? bySev.low).push(f)
 
       let targetText = null
       try { targetText = target.read() } catch { /* non-blocking */ }

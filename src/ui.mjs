@@ -11,8 +11,11 @@ import * as readline from 'node:readline/promises'
 // otherwise colour only when stdout is a TTY. https://no-color.org
 function colorEnabled() {
   if (process.env.NO_COLOR) return false
+  // Match Node's own rule (docs, `FORCE_COLOR`): '', '1', '2', '3', 'true'
+  // enable colour; any other value (incl. '0'/'false') disables it. Note an
+  // *empty* string enables — deliberately, per the standard.
   if (process.env.FORCE_COLOR != null) {
-    return process.env.FORCE_COLOR !== '0' && process.env.FORCE_COLOR !== 'false'
+    return ['', '1', '2', '3', 'true'].includes(process.env.FORCE_COLOR)
   }
   return Boolean(stdout.isTTY)
 }

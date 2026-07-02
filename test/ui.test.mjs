@@ -32,8 +32,18 @@ test('paint respects NO_COLOR / FORCE_COLOR', () => {
 })
 
 test('confirm / select return defaults immediately when non-interactive', async () => {
-  // stdin/stdout are not TTYs under the test runner → no prompt, return default.
-  assert.equal(await confirm('proceed?', false), false)
-  assert.equal(await confirm('proceed?', true), true)
-  assert.equal(await select('pick one', [{ label: 'a', value: 'a' }]), null)
+  // Force non-interactive so the test is deterministic even when run directly
+  // in a terminal (otherwise the prompts would block waiting for input).
+  const stdoutTTY = process.stdout.isTTY
+  const stdinTTY = process.stdin.isTTY
+  try {
+    process.stdout.isTTY = false
+    process.stdin.isTTY = false
+    assert.equal(await confirm('proceed?', false), false)
+    assert.equal(await confirm('proceed?', true), true)
+    assert.equal(await select('pick one', [{ label: 'a', value: 'a' }]), null)
+  } finally {
+    process.stdout.isTTY = stdoutTTY
+    process.stdin.isTTY = stdinTTY
+  }
 })
