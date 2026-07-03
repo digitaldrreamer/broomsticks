@@ -4,7 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.1] — unreleased
+## [0.3.0] — unreleased
+
+### Added
+- New `labeled-password` rule: detects credentials pasted in prose as
+  `password:` / `passwd:` / `passphrase:` values. Lower length floor (8) than
+  the generic catch-all with a modest entropy gate, so short labeled secrets are
+  caught while `printenv` `PWD=` dumps and common placeholders
+  (`your-password`, `<redacted>`, …) are filtered out.
+- Rules can now carry an optional `deny` regex to drop placeholder values that
+  clear the entropy gate.
+
+## [0.2.1] — 2026-07-02
 
 ### Fixed
 - Report: findings with an unexpected severity are bucketed under `low` instead
