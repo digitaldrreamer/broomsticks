@@ -30,6 +30,8 @@ const SAMPLES = {
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
   'db-url': 'postgres://admin:s3cr3tP4ss@db.example.com:5432/app',
   'generic-secret': 'api_key = "aZ9xK2mQ7wL4pR8vT1nY6bC3dE5fG0hJ"',
+  // 15-char value: under the generic rule's 16-char floor, caught by the label.
+  'labeled-password': 'Root password: uG9p3EqZ7mK1nZ2',
 }
 
 for (const [ruleId, sample] of Object.entries(SAMPLES)) {
@@ -67,10 +69,20 @@ test('decoys do not match any rule', () => {
     'See commit 1234567890abcdef1234567890abcdef12345678 for details', // bare sha
     'Connect to https://example.com/path?q=1',  // url, no inline credentials
     'const timeout = 30000',
+    'PWD=/home/user/Documents/Projects/broomsticks', // env dump: not a `pwd` keyword
+    'password: your-password',                  // placeholder cleared by deny list
+    'Password: <redacted>',                     // angle-bracket placeholder
   ]
   for (const d of decoys) {
     assert.deepEqual([...ruleIds(d)], [], `unexpected match in decoy: ${d}`)
   }
+})
+
+test('labeled-password: catches a labeled value under the generic 16-char floor', () => {
+  // The reported leak: a 15-char credential the entropy catch-all missed on length.
+  const ids = ruleIds('Root password: uG9p3EqZ7mK1nZ2')
+  assert.ok(ids.has('labeled-password'), 'expected labeled-password to fire')
+  assert.ok(!ids.has('generic-secret'), 'generic rule should not fire below 16 chars')
 })
 
 test('overlapping matches resolve to a single non-nested finding', () => {

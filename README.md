@@ -99,6 +99,14 @@ broom proxy --uninstall                 # remove the daemon *and* the env vars
 
 > Install globally (`npm install -g broomsticks`) when using this — the hook prefers the `broom` command but falls back to `npx broomsticks`, which re-resolves the package on every turn and adds noticeable latency.
 
+Want just the skill (no Stop hook)? Install it directly with [`skills`](https://github.com/obra/skills):
+
+```bash
+npx skills add digitaldrreamer/broomsticks/skills/broom-sweep
+```
+
+This adds the `broom-sweep` skill so you can invoke `/broom-sweep` on demand, without wiring up the automatic per-turn scan.
+
 ## How it works
 
 A matched secret is replaced inline with a stable, non-reversible placeholder:
@@ -123,6 +131,7 @@ Detection is a curated, gitleaks-style ruleset for high-confidence provider toke
 | Billing / SaaS | Stripe `sk_live_…`, Paddle `pdl_live_…`, Slack `xox[baprs]-…` |
 | Tokens | JWTs (`eyJ….eyJ….…`) |
 | Connection strings | `postgres://`, `mysql://`, `mongodb+srv://`, `redis://` with inline credentials |
+| Labeled passwords | `password:` / `passwd:` / `passphrase:` values pasted in prose (lower length floor; placeholder-filtered) |
 | Generic | `api_key` / `secret` / `password` / `token` assignments above an entropy threshold |
 
 </details>

@@ -36,6 +36,7 @@ export function scanText(text, rules, extras = []) {
       const [start, end] = indices
 
       if (rule.entropy !== undefined && shannonEntropy(secret) < rule.entropy) continue
+      if (rule.deny && rule.deny.test(secret)) continue
 
       raw.push({ ruleId: rule.id, title: rule.title, severity: rule.severity, secret, start, end })
     }

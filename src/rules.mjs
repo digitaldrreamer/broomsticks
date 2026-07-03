@@ -8,7 +8,11 @@
 
 /**
  * @typedef {'critical'|'high'|'medium'|'low'} Severity
- * @typedef {{ id:string, title:string, severity:Severity, pattern:RegExp, secretGroup?:number, entropy?:number }} Rule
+ * @typedef {{ id:string, title:string, severity:Severity, pattern:RegExp, secretGroup?:number, entropy?:number, deny?:RegExp }} Rule
+ *
+ * `deny` (optional): if the captured secret matches this RegExp in full, the
+ * match is discarded. Used to drop well-known placeholder values that clear the
+ * entropy gate (e.g. `your-password`).
  */
 
 /**
@@ -233,6 +237,32 @@ export const RULES = [
     severity: 'high',
     pattern: /((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqp|amqps):\/\/[^:@\s]{1,128}:[^@\s]{1,256}@[^\s'"`,)]{8,256})/gd,
     secretGroup: 1,
+  },
+
+  // ── Labeled password in prose (scoped, low floor) ─────────────────────────
+  // Pasting a credential as "Password: <value>" is the single most common human
+  // leak, and it slips under the generic rule's 16-char floor. Here the label
+  // itself is the signal, so we run a lower length floor (8) with only a modest
+  // entropy gate (3.0) — enough to drop fixed-char placeholders (xxxxxxxx → 0
+  // bits) but not to require token-grade randomness.
+  //
+  // `pwd` is deliberately NOT a keyword: transcripts routinely contain
+  // `printenv`/`env` output, and `PWD=/home/...` (a path that clears the entropy
+  // gate) would be a systematic false positive. `password|passwd|passphrase`
+  // only.
+  //
+  // Genuinely weak human passwords (changeme ≈ 2.75, hunter2 ≈ 2.81) are left
+  // uncaught on purpose: they sit in the same entropy band as — and below —
+  // common placeholders (your-password ≈ 3.24), so no threshold separates them.
+  // The `deny` list removes the placeholder strings that do clear the gate.
+  {
+    id: 'labeled-password',
+    title: 'Labeled password or passphrase',
+    severity: 'medium',
+    pattern: /\b(?:password|passwd|passphrase)\s*[:=]\s*["']?([A-Za-z0-9+/=_\-!@#$%^&*]{8,128})["']?/gid,
+    secretGroup: 1,
+    entropy: 3,
+    deny: /^(?:your[-_]?password(?:[-_]?here)?|password\d*|examplepassword|example|placeholder|changeme\d*|redacted|<.*>|\*+|x+)$/i,
   },
 
   // ── Generic secret assignment (entropy-gated, runs last) ─────────────────
