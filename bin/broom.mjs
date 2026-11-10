@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { RULES }            from '../src/rules.mjs'
-import { scanText }         from '../src/detector.mjs'
+import { scanText, scanJsonLines } from '../src/detector.mjs'
 import { redactText }       from '../src/redactor.mjs'
 import { BackupSession }    from '../src/backup.mjs'
 import { printReport, printJsonReport } from '../src/report.mjs'
@@ -244,17 +244,22 @@ if (apply && !flag('--yes') && isInteractive()) {
 const backup    = (!noBackup && apply) ? new BackupSession(backupDir) : null
 
 const scanResults = []
+let failures = 0
 
 for (const target of targets) {
   let text
+  let raw
   try {
     text = target.read()
+    raw = (target.source === 'claude-code' || target.source === 'codex')
+      ? scanJsonLines(text, RULES, extras)
+      : scanText(text, RULES, extras)
   } catch (e) {
-    console.error(`broom: cannot read '${target.label}': ${e.message}`)
+    failures++
+    console.error(`broom: cannot scan '${target.label}': ${e.message}`)
     continue
   }
 
-  const raw      = scanText(text, RULES, extras)
   const findings = allowlist
     ? raw.filter(f => !isAllowlisted(f.secret, allowlist))
     : raw
@@ -262,15 +267,15 @@ for (const target of targets) {
   let applied = 0
 
   if (findings.length > 0 && isClean && apply) {
-    // Back up before the first write to this file
-    if (backup) backup.backup(target.file)
-
-    const { text: redacted, applied: n } = redactText(text, findings)
     try {
+      const { text: redacted, applied: n } = redactText(text, findings)
+      // Back up before the first write to this file
+      if (backup) backup.backup(target.file)
       target.write(redacted)
       applied = n
     } catch (e) {
-      console.error(`broom: cannot write '${target.label}': ${e.message}`)
+      failures++
+      console.error(`broom: cannot clean '${target.label}': ${e.message}`)
     }
   }
 
@@ -278,17 +283,26 @@ for (const target of targets) {
 }
 
 // ── Write manifest after all writes complete ──────────────────────────────────
-if (backup) backup.writeManifest(scanResults)
+if (backup) {
+  try {
+    backup.writeManifest(scanResults)
+  } catch (e) {
+    failures++
+    console.error(`broom: cannot write backup manifest: ${e.message}`)
+  }
+}
 
 // ── Output ────────────────────────────────────────────────────────────────────
 if (jsonOut) {
   printJsonReport(scanResults)
+} else if (scanResults.length) {
+  printReport(scanResults, { clean: isClean, apply, verbose, backedUp: !!backup })
 } else {
-  printReport(scanResults, { clean: isClean, apply, verbose })
+  console.error('broom: no transcripts could be scanned')
 }
 
 const totalFindings = scanResults.reduce((n, r) => n + r.findings.length, 0)
-process.exit(totalFindings > 0 && !noFail ? 1 : 0)
+process.exit(failures > 0 || (totalFindings > 0 && !noFail) ? 1 : 0)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

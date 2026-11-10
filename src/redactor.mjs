@@ -6,6 +6,7 @@
 //           across files without re-exposing the value
 
 import { createHash } from 'node:crypto'
+import { assertJsonStructure } from './json.mjs'
 
 /**
  * Replace every finding's secret span with a placeholder.
@@ -25,11 +26,18 @@ export function redactText(text, findings) {
   let applied = 0
 
   for (const f of ordered) {
-    const placeholder = buildPlaceholder(f.ruleId, f.secret)
+    let placeholder = buildPlaceholder(f.ruleId, f.secret)
+    if (f.jsonDepth !== undefined) {
+      placeholder = JSON.stringify(placeholder)
+      for (let depth = 0; depth < f.jsonDepth; depth++) {
+        placeholder = JSON.stringify(placeholder).slice(1, -1)
+      }
+    }
     result = result.slice(0, f.start) + placeholder + result.slice(f.end)
     applied++
   }
 
+  assertJsonStructure(text, result, findings.some(f => f.jsonDepth !== undefined))
   return { text: result, applied }
 }
 

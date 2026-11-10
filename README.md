@@ -63,7 +63,7 @@ By default the report is a compact summary — grouped by AI client, showing how
 | `--allowlist <file>` | Custom allowlist (default `~/.broom/allowlist.txt`) |
 | `--no-allowlist` | Report every finding, ignoring the allowlist |
 | `--json` | Emit findings as JSON |
-| `--no-fail` | Exit `0` even when secrets are found |
+| `--no-fail` | Exit `0` for findings; scan, backup and write errors still fail |
 
 ### `proxy`
 
@@ -116,6 +116,8 @@ sk-ant-api03-VRLD…Ahg   →   «BROOM:anthropic-key:9f3a1c2b»
 ```
 
 The `sha8` (first 8 hex chars of the secret's SHA-256) lets you correlate the same leak across files without revealing it. Placeholders contain no JSON-breaking characters — JSONL transcripts and Cursor's stored blobs stay valid — and never match a detection rule, so `broom clean` is idempotent: run it as often as you like.
+
+JSON and JSONL matches stay within individual strings and records, including serialized tool arguments and cache keys. Escapes and surrounding formatting are preserved, and Cursor values retain their original TEXT or BLOB storage type. Malformed JSONL files and redactions that would merge object entries are skipped with an error before anything is written. Other transcripts can still be cleaned, and successful backups remain recorded in the manifest.
 
 Detection is a curated, gitleaks-style ruleset for high-confidence provider tokens, plus an entropy-gated catch-all for unknown `KEY=value` / `"token": "…"` shapes. The exact rules, severities, and thresholds live in [`src/rules.mjs`](./src/rules.mjs).
 

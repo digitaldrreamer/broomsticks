@@ -83,20 +83,20 @@ function shorten(label) {
  * useful for a handful of findings, overwhelming for thousands.
  *
  * @param {ScanResult[]} results
- * @param {{ clean?: boolean, apply?: boolean, verbose?: boolean }} [opts]
+ * @param {{ clean?: boolean, apply?: boolean, verbose?: boolean, backedUp?: boolean }} [opts]
  *   clean   — true when called from `broom clean` (adjusts wording)
  *   apply   — true when redaction was actually performed
  *   verbose — true to list every finding, not just per-file counts
  */
 export function printReport(results, opts = {}) {
-  const { clean = false, apply = false, verbose = false } = opts
+  const { clean = false, apply = false, verbose = false, backedUp = true } = opts
 
   const totalOccurrences = results.reduce((n, r) => n + r.findings.length, 0)
   const totalApplied = results.reduce((n, r) => n + (r.applied ?? 0), 0)
 
   // ── Header ────────────────────────────────────────────────────────────────
   const cmd = clean ? (apply ? 'sweep' : 'clean') : 'scan'
-  const mode = apply ? `${bold('redacted in place')}` : `${dim('dry-run')}`
+  const mode = apply ? bold(totalApplied > 0 ? 'redacted in place' : 'no redactions applied') : dim('dry-run')
   console.log()
   console.log(`${bold('broomsticks')} ${cmd} — ${mode}`)
 
@@ -114,7 +114,7 @@ export function printReport(results, opts = {}) {
   // Distinct vs occurrences: the same key echoed many times counts once above.
   if (totalOccurrences !== totalDistinct) headline += dim(`  (${plural(totalOccurrences, 'occurrence')})`)
   console.log(headline)
-  if (apply) console.log(`  ${bold(plural(totalApplied, 'redaction'))} applied; originals backed up.`)
+  if (apply) console.log(`  ${bold(plural(totalApplied, 'redaction'))} applied${totalApplied > 0 && backedUp ? '; originals backed up.' : '.'}`)
   console.log()
 
   if (verbose) {

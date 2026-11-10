@@ -111,3 +111,12 @@ test('shannonEntropy: uniform vs repeated', () => {
   assert.equal(shannonEntropy('aaaa'), 0)
   assert.ok(shannonEntropy('abcd') > 1.9) // 4 distinct chars → 2 bits
 })
+
+test('scans start with fresh regex state without changing the supplied rules', () => {
+  const pattern = /known-secret/gd
+  pattern.lastIndex = 100
+  const rule = { id: 'test', title: 'test', severity: 'high', pattern }
+  assert.equal(scanText('known-secret', [rule]).length, 1)
+  assert.equal(scanText('{"text":"known-secret"}', [rule]).length, 1)
+  assert.equal(pattern.lastIndex, 100)
+})

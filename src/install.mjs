@@ -50,7 +50,12 @@ function scan() {
   for (const cmd of ['broom scan --json --no-fail', 'npx broomsticks scan --json --no-fail']) {
     try {
       return execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-    } catch { /* command not found or scan itself errored */ }
+    } catch (error) {
+      // A partial scan still reports findings from readable transcripts.
+      if (error.stdout) {
+        try { JSON.parse(error.stdout); return error.stdout } catch { /* no valid report */ }
+      }
+    }
   }
   return null
 }

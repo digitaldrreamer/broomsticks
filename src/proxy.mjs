@@ -258,11 +258,14 @@ async function handleRequest(req, res, allowlist, vault, verbose) {
   const vaultBefore = vault.size
 
   if (req.headers['content-type']?.includes('application/json')) {
+    let json
     try {
-      const json     = JSON.parse(rawBody.toString('utf8'))
+      json = JSON.parse(rawBody.toString('utf8'))
+    } catch { /* non-JSON — forward as-is */ }
+    if (json !== undefined) {
       const cleaned  = redactValue(json, allowlist, vault)
       outBody = Buffer.from(JSON.stringify(cleaned), 'utf8')
-    } catch { /* non-JSON — forward as-is */ }
+    }
   }
 
   if (verbose && vault.size > vaultBefore) {
@@ -286,12 +289,15 @@ async function handleRequest(req, res, allowlist, vault, verbose) {
       : redactOpenAISSE(lines, allowlist, vault)
     responseBody = Buffer.from(cleanedLines.join('\n'), 'utf8')
   } else {
+    let json
     try {
-      const json    = JSON.parse(upBody.toString('utf8'))
-      const cleaned = redactValue(json, allowlist, vault)
-      responseBody  = Buffer.from(JSON.stringify(cleaned), 'utf8')
+      json = JSON.parse(upBody.toString('utf8'))
     } catch {
       responseBody = upBody
+    }
+    if (json !== undefined) {
+      const cleaned = redactValue(json, allowlist, vault)
+      responseBody  = Buffer.from(JSON.stringify(cleaned), 'utf8')
     }
   }
 
