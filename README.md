@@ -124,13 +124,25 @@ Then invoke `/broom-sweep` on demand.
 
 ## How it works
 
-A matched secret is replaced inline with a stable, non-reversible placeholder:
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:a3f4aad897c584b67fafc7f180ea3a40d2869d7ba4a7e2b7d32ace34225fd7d0 -->
+
+A matched secret is replaced inline with a stable placeholder:
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ```
 sk-ant-api03-VRLD…Ahg   →   «BROOM:anthropic-key:9f3a1c2b»
 ```
 
-The final component is the first eight hexadecimal characters of the secret's SHA-256 hash. It lets you correlate the same leak across files without revealing the credential. Placeholders contain no JSON-breaking characters and are designed to stay unchanged on repeated sweeps.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:cd7de028ec70dc74f91b027bb5c0c83ead8a2487a68024cd583ab0ec4ddd5c5f -->
+
+The final component is the first eight hexadecimal characters of the secret's SHA-256 hash. It lets you correlate the same leak across files without including the credential itself. However, someone can hash candidate credentials and compare the suffix, enabling guessing of weak or guessable credentials. Consider this risk before sharing placeholders. Placeholders contain no JSON-breaking characters and are designed to stay unchanged on repeated sweeps.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 Detection uses gitleaks-style rules for provider tokens, plus an entropy threshold for unfamiliar credentials in assignments such as `api_key=value`. The exact rules, severities, and thresholds live in [`src/rules.mjs`](./src/rules.mjs).
 
@@ -167,7 +179,13 @@ Paths above are for Linux. macOS and Windows equivalents are resolved automatica
 <details>
 <summary><b>Allowlist</b></summary>
 
-Common documentation placeholders, including AWS's `AKIAIOSFODNN7EXAMPLE`, Stripe test keys, and `.env.example` values, are suppressed by default. Add your own known false positives to `~/.broom/allowlist.txt`:
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:3014afd15ec9185995fb46c56e24dd1414aabf5a0967a40809abfa4feebba8b2 -->
+
+Known documentation placeholders, including AWS's `AKIAIOSFODNN7EXAMPLE` and specific `.env.example` values, are suppressed by the built-in allowlist. Running `broom install` creates `~/.broom/allowlist.txt` if it does not already exist, adding a default pattern for `sk_test_` keys with 10–99 alphanumeric characters after the prefix. Without running `broom install` (or adding an equivalent allowlist entry), `sk_test_` keys may be reported and redacted. The installed default allowlist does not suppress `rk_test_` keys. Add your own known false positives to `~/.broom/allowlist.txt`:
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ```
 # one entry per line; blank lines and # comments ignored
