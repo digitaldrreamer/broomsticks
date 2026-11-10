@@ -1,12 +1,14 @@
 # 🧹 broomsticks
 
-> Sweep leaked secrets out of your AI coding-assistant transcripts — Claude Code, Codex, and Cursor — and stop new ones from ever leaving your machine.
+> Clean leaked secrets from your AI chat history.
 
 [![npm](https://img.shields.io/npm/v/broomsticks.svg)](https://www.npmjs.com/package/broomsticks)
 [![node](https://img.shields.io/node/v/broomsticks.svg)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/broomsticks.svg)](./LICENSE)
 
-broomsticks does two things: it **cleans** secrets already sitting in your local AI chat transcripts, and it **prevents** new leaks with a local proxy that redacts secrets before they reach the model. Plain ESM, zero runtime dependencies, dry-run by default.
+broomsticks finds and redacts secrets in local transcripts from **Claude Code, Codex, and Cursor**. Its optional proxy also redacts detected secrets from API requests before they reach the provider.
+
+Built with plain ESM and no runtime dependencies. Scans are read-only, and cleanup runs as a dry-run by default.
 
 ## Quick start
 
@@ -21,18 +23,24 @@ npx broomsticks sweep
 
 Run `broom` with no arguments in a terminal for an interactive menu.
 
-Prefer a global command? `npm install -g broomsticks` gives you `broom` (used throughout this README). Requires **Node ≥ 22.13** — it reads Cursor's SQLite store with the built-in `node:sqlite`, unflagged as of 22.13.0, so there are no native modules to build.
+Install globally to use `broom` in the examples below:
+
+```bash
+npm install -g broomsticks
+```
+
+Requires **Node.js 22.13.0 or later**. Cursor support uses the built-in `node:sqlite`, so there are no native modules to build.
 
 ## What it does
 
-AI assistants keep a full, local, plaintext record of every session — your prompts, the model's replies, and the raw output of every tool call. Secrets quietly pile up there: a pasted `.env`, an agent that runs `printenv` or `cat config`, a stack trace with a bearer token. Those files then linger under `~/.claude`, `~/.codex`, and Cursor's `state.vscdb` and get swept into Time Machine, Dropbox, and `rsync` backups. A key in a transcript is just as live as one in a committed `.env`, but nothing scans for it.
+AI coding assistants save prompts, replies, and tool output locally. A pasted `.env`, an agent running `printenv`, or a stack trace with a bearer token can leave credentials in that history. Records under `~/.claude`, `~/.codex`, and Cursor's `state.vscdb` can also end up in Time Machine, Dropbox, or `rsync` backups.
 
-Two tools — use either or both:
+Use either or both:
 
-- **Clean up — `broom scan` / `broom clean`.** Finds secrets already written to disk and redacts them in place. Dry-run by default; every write is backed up first.
-- **Prevent — `broom proxy`.** A local proxy between your tools and the provider API that strips secrets out of requests *before they're sent* — and out of responses the model echoes back.
+- **Clean up existing transcripts.** Use `broom scan` to find secrets, `broom clean` to preview redactions, and `broom sweep` to apply them.
+- **Redact API traffic.** Use `broom proxy` between your tools and the provider API. It scans outgoing requests and incoming assistant text and tool-call arguments.
 
-**Safety by design:** nothing is modified without `--apply` · every touched file is backed up · only chat transcripts are read, never credential files like `~/.aws/credentials` · `scan`/`clean` do zero networking (enforced by a test) · redaction is non-reversible and idempotent.
+Transcripts are modified only by `sweep` or `clean --apply`. Each changed file is backed up first unless you pass `--no-backup`. The scanner reads supported transcript locations, leaving credential files such as `~/.aws/credentials` alone. Scanning and cleanup run locally without network access.
 
 ## Commands
 
@@ -46,10 +54,12 @@ broom clean                             # preview redactions (dry-run)
 broom sweep                             # redact in place, backing up first (= clean --apply)
 broom scan --verbose                    # list every finding, not just per-file counts
 broom scan --json                       # machine-readable output
-broom sweep --extra ./leaked.txt        # also scrub your own known values
+broom sweep --extra ./leaked.txt         # also scrub your own known values
 ```
 
-By default the report is a compact summary — grouped by AI client, showing how many chats are affected and how many **distinct** secrets are exposed (the same key echoed many times across a transcript counts once; the total occurrence count is shown alongside). Add `--verbose` to list every occurrence with its rule and line. Colour is used on a terminal and disabled automatically when piped or when `NO_COLOR` is set. `sweep` (and `clean --apply`) asks for confirmation on a terminal; pass `--yes` to skip it, and in a pipe/CI it proceeds without prompting.
+Reports group findings by AI client and show affected chats, **distinct secrets**, and total occurrences. A key repeated within a transcript counts once toward the distinct total. Add `--verbose` to list each occurrence with its rule and line number.
+
+Colour is enabled in a terminal and disabled when piped or when `NO_COLOR` is set. `sweep` and `clean --apply` ask for confirmation in a terminal. Pass `--yes` to skip the prompt. Non-interactive runs, including pipes and CI, proceed without prompting.
 
 | Flag | Meaning |
 | --- | --- |
@@ -59,7 +69,7 @@ By default the report is a compact summary — grouped by AI client, showing how
 | `--verbose` | List every finding, not just per-file counts |
 | `--backup-dir <dir>` | Where backups go (default `~/.broom/backups/<timestamp>/`) |
 | `--no-backup` | Skip backups (discouraged) |
-| `--extra <file>` | Extra literal / `/regex/` secrets to redact, one per line |
+| `--extra <file>` | Extra literal secrets or `/regex/` patterns, one per line |
 | `--allowlist <file>` | Custom allowlist (default `~/.broom/allowlist.txt`) |
 | `--no-allowlist` | Report every finding, ignoring the allowlist |
 | `--json` | Emit findings as JSON |
@@ -73,9 +83,11 @@ export ANTHROPIC_BASE_URL=http://127.0.0.1:7777
 export OPENAI_BASE_URL=http://127.0.0.1:7777
 ```
 
-Routes `POST /v1/messages` → `api.anthropic.com` (Claude Code, Aider) and `POST /v1/chat/completions` → `api.openai.com` (Codex and other OpenAI-compatible clients). Streaming (SSE) and non-streaming responses both work — a streaming response is buffered in full, redacted, then re-emitted as a valid stream so a secret can't slip through a chunk boundary. Redaction covers assistant **text** and **tool-call arguments** (e.g. a secret the model echoes into a `write_file` content or shell-command argument); extended-thinking blocks are the one exception — see [Limitations](#limitations).
+The proxy routes `POST /v1/messages` to `api.anthropic.com` for Claude Code and Aider. It routes `POST /v1/chat/completions` to `api.openai.com` for Codex and other OpenAI-compatible clients.
 
-Make it permanent instead of exporting vars by hand:
+Both streaming (SSE) and non-streaming responses are supported. Streaming responses are buffered in full before redaction, so detection can catch secrets split across chunks. Redaction covers assistant **text** and **tool-call arguments**, including file contents and shell-command arguments. Extended-thinking blocks pass through unchanged; see [Limitations](#limitations).
+
+To save these environment variables in your shell profiles and optionally run the proxy at login:
 
 ```bash
 broom proxy --install                   # add the base-URL env vars to your shell profiles
@@ -83,29 +95,32 @@ broom proxy --install --daemon          # + login-persistent daemon (launchd / s
 broom proxy --uninstall                 # remove the daemon *and* the env vars
 ```
 
-> **Headless Linux:** `loginctl enable-linger` (no argument — targets the current user) lets the `--daemon` service run without an active login. With no argument it typically needs no root privileges where Polkit is configured to allow self-lingering. After `--uninstall`, open a new terminal so your shell stops pointing at the stopped proxy.
+> **Headless Linux:** `loginctl enable-linger` with no argument targets the current user and lets the daemon run without an active login. It typically needs no root privileges where Polkit allows self-lingering. After `--uninstall`, open a new terminal so your shell stops pointing at the stopped proxy.
 
 | Flag | Meaning |
 | --- | --- |
 | `--port <n>` | Port to listen on (default `7777`) |
 | `--verbose` | Log redaction counts to stderr |
 | `--allowlist <file>` | Suppress known false positives |
-| `--install` / `--install --daemon` | Wire env vars / also install the daemon (logs to `~/.broom/proxy.log`) |
+| `--install` | Add the environment variables to your shell profiles |
+| `--daemon` | With `--install`, also install a login service (logs to `~/.broom/proxy.log`) |
 | `--uninstall` | Remove the daemon and the env vars |
 
 ### `install` (Claude Code integration)
 
-`broom install` wires broomsticks into Claude Code so it sweeps automatically — a `broom-sweep` skill plus a Stop hook that silently scans after every turn (registered in `~/.claude/settings.json`). Restart Claude Code afterward for it to take effect; pass `--yes` to skip the confirmation prompt.
+`broom install` adds the `broom-sweep` skill and a Stop hook that scans after every Claude Code turn. The hook is registered in `~/.claude/settings.json`. When it finds secrets, it prompts Claude to invoke the skill and ask for confirmation before redacting.
 
-> Install globally (`npm install -g broomsticks`) when using this — the hook prefers the `broom` command but falls back to `npx broomsticks`, which re-resolves the package on every turn and adds noticeable latency.
+Restart Claude Code after installation. Pass `--yes` to skip the setup confirmation prompt.
 
-Want just the skill (no Stop hook)? Install it directly with [`skills`](https://github.com/obra/skills):
+> A global install (`npm install -g broomsticks`) keeps the hook faster. It tries `broom` first and falls back to `npx broomsticks`, which adds package resolution and startup time to each scan.
+
+To install the skill without the automatic scan, use [`skills`](https://github.com/obra/skills):
 
 ```bash
 npx skills add digitaldrreamer/broomsticks/skills/broom-sweep
 ```
 
-This adds the `broom-sweep` skill so you can invoke `/broom-sweep` on demand, without wiring up the automatic per-turn scan.
+Then invoke `/broom-sweep` on demand.
 
 ## How it works
 
@@ -115,9 +130,9 @@ A matched secret is replaced inline with a stable, non-reversible placeholder:
 sk-ant-api03-VRLD…Ahg   →   «BROOM:anthropic-key:9f3a1c2b»
 ```
 
-The `sha8` (first 8 hex chars of the secret's SHA-256) lets you correlate the same leak across files without revealing it. Placeholders contain no JSON-breaking characters — JSONL transcripts and Cursor's stored blobs stay valid — and never match a detection rule, so `broom clean` is idempotent: run it as often as you like.
+The final component is the first eight hexadecimal characters of the secret's SHA-256 hash. It lets you correlate the same leak across files without revealing the credential. Placeholders contain no JSON-breaking characters and are designed to stay unchanged on repeated sweeps.
 
-Detection is a curated, gitleaks-style ruleset for high-confidence provider tokens, plus an entropy-gated catch-all for unknown `KEY=value` / `"token": "…"` shapes. The exact rules, severities, and thresholds live in [`src/rules.mjs`](./src/rules.mjs).
+Detection uses gitleaks-style rules for provider tokens, plus an entropy threshold for unfamiliar credentials in assignments such as `api_key=value`. The exact rules, severities, and thresholds live in [`src/rules.mjs`](./src/rules.mjs).
 
 <details>
 <summary><b>Detection rules</b></summary>
@@ -128,10 +143,10 @@ Detection is a curated, gitleaks-style ruleset for high-confidence provider toke
 | Cloud | AWS access keys (`AKIA…`), Google API keys (`AIza…`) |
 | Source hosting | GitHub `ghp_/gho_/ghu_/ghs_/ghr_…`, fine-grained `github_pat_…` |
 | AI providers | OpenAI `sk-…` / `sk-proj-…` / `sk-svcacct-…`, Anthropic `sk-ant-…`, Hugging Face `hf_…` |
-| Billing / SaaS | Stripe `sk_live_…`, Paddle `pdl_live_…`, Slack `xox[baprs]-…` |
+| Billing / SaaS | Stripe `sk_live_…`, Slack `xox[baprs]-…` |
 | Tokens | JWTs (`eyJ….eyJ….…`) |
 | Connection strings | `postgres://`, `mysql://`, `mongodb+srv://`, `redis://` with inline credentials |
-| Labeled passwords | `password:` / `passwd:` / `passphrase:` values pasted in prose (lower length floor; placeholder-filtered) |
+| Labeled passwords | `password:` / `passwd:` / `passphrase:` values in prose, including shorter credentials and excluding known placeholders |
 | Generic | `api_key` / `secret` / `password` / `token` assignments above an entropy threshold |
 
 </details>
@@ -145,14 +160,14 @@ Detection is a curated, gitleaks-style ruleset for high-confidence provider toke
 | **Codex CLI** | `~/.codex/history.jsonl`, `~/.codex/sessions/**` | JSON Lines |
 | **Cursor** | `~/.config/Cursor/User/{globalStorage,workspaceStorage/**}/state.vscdb` (`ItemTable` / `cursorDiskKV`) | SQLite |
 
-Paths shown for Linux; macOS/Windows equivalents are resolved automatically.
+Paths above are for Linux. macOS and Windows equivalents are resolved automatically.
 
 </details>
 
 <details>
 <summary><b>Allowlist</b></summary>
 
-Well-known documentation placeholders (AWS's `AKIAIOSFODNN7EXAMPLE`, Stripe test keys, `.env.example` shapes) are suppressed out of the box. Add your own known false positives to `~/.broom/allowlist.txt`:
+Common documentation placeholders, including AWS's `AKIAIOSFODNN7EXAMPLE`, Stripe test keys, and `.env.example` values, are suppressed by default. Add your own known false positives to `~/.broom/allowlist.txt`:
 
 ```
 # one entry per line; blank lines and # comments ignored
@@ -166,15 +181,17 @@ Plain lines match a secret exactly; `/regex/flags` lines match by pattern. Disab
 
 ## Limitations
 
-- `scan`/`clean` reduce exposure of secrets **already on disk**; they can't un-send anything already transmitted to a provider. **If a secret reached a transcript before you started using the proxy, treat it as compromised and rotate it** — broomsticks is cleanup, not a substitute for rotation.
-- Detection is best-effort. Novel or low-entropy secrets may be missed; tune with `--extra`.
-- Cursor's schema evolves between versions; broomsticks targets the known chat/composer keys and is kept current.
-- The proxy buffers each streaming response in full before redacting — deliberate, so a secret straddling two chunks can't be missed, but the assistant's UI won't render tokens incrementally; long responses arrive all at once after a pause. A sliding-window buffer is a possible future improvement.
-- The proxy scans assistant text and tool-call arguments but **not extended-thinking blocks** — rewriting a thinking block invalidates its cryptographic signature and breaks multi-turn thinking+tool loops. A secret echoed *only* inside thinking passes through unredacted (thinking isn't persisted to transcripts either, so `broom clean` won't see it — if it reached the model, rotate it).
+- Cleanup only affects local transcripts. **Rotate any secret that was sent to a provider or shared elsewhere.** Redacting a local copy cannot undo that exposure.
+- Detection is best-effort. Novel or low-entropy secrets may be missed. Add known values or patterns with `--extra`.
+- Cursor support targets known chat and composer keys. Schema changes may require an update.
+- The proxy buffers each streaming response before redacting it. The assistant's UI receives the response after it completes, so long responses arrive after a pause rather than token by token.
+- **Extended-thinking blocks are not redacted.** Changing them would invalidate their cryptographic signatures and break multi-turn thinking and tool-call flows. Secrets that appear only in those blocks pass through unchanged.
 
 ## Contributing
 
-**v0.1 — first public release.** Issues and PRs welcome, especially new source adapters (Windsurf, Continue, Aider, Zed) and detection rules. See [PLAN.md](./PLAN.md) for architecture and [CHANGELOG.md](./CHANGELOG.md) for release notes. Run the test suite with `npm test` (built-in `node:test` runner — no dependencies).
+Issues and PRs are welcome, especially new source adapters (Windsurf, Continue, Aider, Zed) and detection rules. See [PLAN.md](./PLAN.md) for architecture and [CHANGELOG.md](./CHANGELOG.md) for release notes.
+
+Run the test suite with `npm test`. It uses the built-in `node:test` runner and needs no dependencies.
 
 ## License
 
