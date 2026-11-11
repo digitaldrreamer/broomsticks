@@ -15,6 +15,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Rules can now carry an optional `deny` regex to drop placeholder values that
   clear the entropy gate.
 
+### Fixed
+- `clean --apply` / `sweep` no longer crash with an unhandled `ENOSPC` when the
+  backup destination is full. Free space is checked before each copy (including
+  SQLite `-wal`/`-shm` sidecars); a file that cannot be backed up is skipped,
+  left unmodified, and named in the report instead of aborting the run.
+- `manifest.json` is now written atomically after every backed-up file, so an
+  interrupted or partially failed run still records the backups it made. Files
+  that were skipped are recorded there with the reason.
+- A failed SQLite sidecar copy removes the attempt's new backup files. If copying
+  or recording the manifest fails, earlier backup contents are restored and the
+  original stays untouched, including later chat rows in the same database.
+- The report now prints where the backup went and how large it is, and lists any
+  files that were skipped because their backup failed.
+
 ## [0.2.1] — 2026-07-02
 
 ### Fixed

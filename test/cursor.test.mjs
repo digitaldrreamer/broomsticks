@@ -100,3 +100,103 @@ test('cursor discovery ignores large non-AI blobs and reads values lazily', (t) 
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+test('cursor writes preserve TEXT and BLOB storage and unrelated rows', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'broom-cursor-types-'))
+  const previousHome = process.env.HOME
+  process.env.HOME = home
+  try {
+    const root = cursorUserRoot()
+    if (!root.startsWith(home)) return t.skip('os.homedir() does not honor HOME here')
+    const storage = join(root, 'globalStorage')
+    mkdirSync(storage, { recursive: true })
+    const dbPath = join(storage, 'state.vscdb')
+    const original = JSON.stringify({ text: `😀 ${SECRET}`, keep: 2 })
+    const database = new DatabaseSync(dbPath)
+    database.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)')
+    const insert = database.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)')
+    insert.run('aichat.text', original)
+    insert.run('composer.blob', Buffer.from(original, 'utf8'))
+    insert.run('workbench.settings', Buffer.from('keep these bytes'))
+    database.close()
+
+    const targets = discoverTargets()
+    assert.equal(targets.length, 2)
+    for (const target of targets) {
+      const text = target.read()
+      target.write(redactText(text, scanText(text, RULES)).text)
+    }
+
+    const saved = new DatabaseSync(dbPath, { readOnly: true })
+    try {
+      const rows = saved.prepare('SELECT key, value, typeof(value) AS kind FROM ItemTable ORDER BY key').all()
+      assert.equal(rows[0].kind, 'text')
+      assert.equal(rows[1].kind, 'blob')
+      for (const row of rows.slice(0, 2)) {
+        const text = typeof row.value === 'string' ? row.value : Buffer.from(row.value).toString('utf8')
+        const parsed = JSON.parse(text)
+        assert.equal(parsed.keep, 2)
+        assert.ok(parsed.text.startsWith('😀 «BROOM:github-pat:'))
+        assert.equal(scanText(text, RULES).length, 0)
+      }
+      assert.deepEqual(Buffer.from(rows[2].value), Buffer.from('keep these bytes'))
+      assert.equal(Object.values(saved.prepare('PRAGMA quick_check').get())[0], 'ok')
+    } finally {
+      saved.close()
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('cursor writes fail if a discovered row disappears', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'broom-cursor-missing-'))
+  const previousHome = process.env.HOME
+  process.env.HOME = home
+  try {
+    const root = cursorUserRoot()
+    if (!root.startsWith(home)) return t.skip('os.homedir() does not honor HOME here')
+    const storage = join(root, 'globalStorage')
+    mkdirSync(storage, { recursive: true })
+    const database = new DatabaseSync(join(storage, 'state.vscdb'))
+    database.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)')
+    database.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)').run('composer.chat', SECRET)
+    const [target] = discoverTargets()
+    database.exec('DELETE FROM ItemTable')
+    database.close()
+    assert.throws(() => target.write('redacted'), /no longer exists/)
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('cursor rejects invalid UTF-8 BLOBs without changing their bytes', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'broom-cursor-utf8-'))
+  const previousHome = process.env.HOME
+  process.env.HOME = home
+  try {
+    const root = cursorUserRoot()
+    if (!root.startsWith(home)) return t.skip('os.homedir() does not honor HOME here')
+    const storage = join(root, 'globalStorage')
+    mkdirSync(storage, { recursive: true })
+    const database = new DatabaseSync(join(storage, 'state.vscdb'))
+    try {
+      database.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)')
+      const original = Buffer.concat([Buffer.from(`before ${SECRET} after `), Buffer.from([0xff, 0xc3, 0x28])])
+      database.prepare('INSERT INTO ItemTable VALUES (?, ?)').run('composer.chat', original)
+      const [target] = discoverTargets()
+      assert.throws(() => target.read(), /UTF-8/)
+      assert.deepEqual(Buffer.from(database.prepare('SELECT value FROM ItemTable').get().value), original)
+    } finally {
+      database.close()
+    }
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+    rmSync(home, { recursive: true, force: true })
+  }
+})

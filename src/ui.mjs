@@ -55,6 +55,27 @@ export function isInteractive() {
 }
 
 /**
+ * Human-readable byte count, e.g. 944 MB or 2.1 GB. Used in backup messages and
+ * the end-of-run report; never for machine-readable output.
+ * @param {number} bytes
+ * @returns {string}
+ */
+export function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return 'unknown size'
+  if (bytes < 1024) return `${bytes} B`
+
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  // One decimal below 10 ("2.1 GB"), whole numbers above ("944 MB").
+  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
+}
+
+/**
  * Ask a yes/no question. Returns `def` immediately when non-interactive so the
  * CLI never blocks in a pipe or CI.
  * @param {string} question

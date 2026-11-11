@@ -113,3 +113,35 @@ test('openai: content path still redacts (no regression)', () => {
   assert.ok(!joined(out).includes(SECRET))
   assert.equal(vault.size, 1)
 })
+
+test('anthropic: quoted database URLs preserve streamed tool argument JSON', () => {
+  const url = 'postgres://' + 'reader:Example123@database.example.invalid/app'
+  const argumentsText = JSON.stringify({ command: `connect("${url}")`, keep: [true, 3] })
+  const split = argumentsText.indexOf('Example') + 3
+  const vault = new Map()
+  const lines = [argumentsText.slice(0, split), argumentsText.slice(split)].map(partial_json =>
+    'data: ' + JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json } }))
+  const output = redactAnthropicSSE(lines, null, vault)
+  const parts = output.map(line => JSON.parse(line.slice(5)).delta.partial_json).join('')
+  const parsed = JSON.parse(parts)
+  assert.match(parsed.command, /^connect\("«BROOM:db-url:[a-f0-9]{8}»"\)$/)
+  assert.deepEqual(parsed.keep, [true, 3])
+  assert.equal([...vault.values()][0], url)
+})
+
+test('openai: quoted database URLs preserve streamed tool argument JSON', () => {
+  const url = 'postgres://' + 'reader:Example123@database.example.invalid/app'
+  const argumentsText = JSON.stringify({ command: `connect("${url}")`, keep: [true, 3] })
+  const split = argumentsText.indexOf('Example') + 3
+  const vault = new Map()
+  const lines = [argumentsText.slice(0, split), argumentsText.slice(split)].map(argumentsPart =>
+    'data: ' + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: argumentsPart } }] } }] }))
+  const output = redactOpenAISSE(lines, null, vault)
+  const parts = output.flatMap(line => JSON.parse(line.slice(5)).choices)
+    .flatMap(choice => choice.delta.tool_calls)
+    .map(call => call.function.arguments).join('')
+  const parsed = JSON.parse(parts)
+  assert.match(parsed.command, /^connect\("«BROOM:db-url:[a-f0-9]{8}»"\)$/)
+  assert.deepEqual(parsed.keep, [true, 3])
+  assert.equal([...vault.values()][0], url)
+})

@@ -73,7 +73,11 @@ Colour is enabled in a terminal and disabled when piped or when `NO_COLOR` is se
 | `--allowlist <file>` | Custom allowlist (default `~/.broom/allowlist.txt`) |
 | `--no-allowlist` | Report every finding, ignoring the allowlist |
 | `--json` | Emit findings as JSON |
-| `--no-fail` | Exit `0` even when secrets are found |
+| `--no-fail` | Exit `0` for findings; scan, backup and write errors still fail |
+
+#### Backups
+
+Every write is preceded by a copy of the original under `~/.broom/backups/<timestamp>/` (or `--backup-dir`). Before copying, broom checks that the destination has room for the file plus any SQLite `-wal`/`-shm` sidecars. If space is short, copying fails, or the backup cannot be recorded in `manifest.json`, **that transcript is skipped and left untouched**, the rest of the run continues, and the file is listed under *Skipped* with the reason. Failed attempts remove their new copies and restore any older backups they replaced. `manifest.json` is rewritten after each backed-up file, before redaction is allowed, so an interrupted run still records the backups of modified originals. The end of the report prints where the backup went and how large it is. Backups are never pruned automatically — delete old folders under `~/.broom/backups/` once you no longer need them.
 
 ### `proxy`
 
@@ -143,6 +147,8 @@ sk-ant-api03-VRLD…Ahg   →   «BROOM:anthropic-key:9f3a1c2b»
 The final component is the first eight hexadecimal characters of the secret's SHA-256 hash. It lets you correlate the same leak across files without including the credential itself. However, someone can hash candidate credentials and compare the suffix, enabling guessing of weak or guessable credentials. Consider this risk before sharing placeholders. Placeholders contain no JSON-breaking characters and are designed to stay unchanged on repeated sweeps.
 
 <!-- /coderabbit-ai-generated:v1 -->
+
+JSON and JSONL matches stay within individual strings and records, including serialized tool arguments and cache keys. Escapes and surrounding formatting are preserved, and Cursor values retain their original TEXT or BLOB storage type. Malformed JSONL files and redactions that would merge object entries are skipped with an error before anything is written. Other transcripts can still be cleaned, and successful backups remain recorded in the manifest.
 
 Detection uses gitleaks-style rules for provider tokens, plus an entropy threshold for unfamiliar credentials in assignments such as `api_key=value`. The exact rules, severities, and thresholds live in [`src/rules.mjs`](./src/rules.mjs).
 

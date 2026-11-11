@@ -17,6 +17,7 @@ import { readdirSync, existsSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { isUtf8 } from 'node:buffer'
 
 /** Keys matching this pattern carry AI conversation content worth scanning. */
 const AI_KEY_RE = /chat|composer|aiService|aichat|prompt|cursorai/i
@@ -144,7 +145,11 @@ export function discoverTargets() {
           try {
             const row = conn.prepare(`SELECT value FROM [${tbl}] WHERE key = ?`).get(k)
             if (!row) return ''
-            return Buffer.isBuffer(row.value) ? row.value.toString('utf8') : String(row.value ?? '')
+            if (row.value instanceof Uint8Array) {
+              if (!isUtf8(row.value)) throw new Error('Cursor transcript BLOB is not valid UTF-8')
+              return Buffer.from(row.value).toString('utf8')
+            }
+            return String(row.value ?? '')
           } finally {
             conn.close()
           }
@@ -155,7 +160,9 @@ export function discoverTargets() {
           // "attempt to write a readonly database".
           const conn = new DatabaseSync(db, { open: true, readOnly: false })
           try {
-            conn.prepare(`UPDATE [${tbl}] SET value = ? WHERE key = ?`).run(text, k)
+            const result = conn.prepare(`UPDATE [${tbl}] SET value = CASE typeof(value) WHEN 'blob' THEN ? ELSE ? END WHERE key = ?`)
+              .run(Buffer.from(text, 'utf8'), text, k)
+            if (Number(result.changes) !== 1) throw new Error('Cursor transcript row no longer exists')
           } finally {
             conn.close()
           }
