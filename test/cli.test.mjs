@@ -60,6 +60,10 @@ test('scan → clean --apply → re-scan lifecycle', () => {
     assert.ok(stamps.length >= 1)
     assert.ok(existsSync(join(backupsRoot, stamps[0], 'manifest.json')))
 
+    // The run tells the user where the backup went and how big it is.
+    assert.match(clean.stdout, /Backups\s+~[\\/]\.broom[\\/]backups/)
+    assert.match(clean.stdout, /\(\d+ files?, [\d.]+ (?:B|KB|MB|GB)\)/)
+
     // re-scan: clean now, zero exit
     const rescan = run(['scan', '--json', '--source', 'claude-code'], home)
     assert.equal(rescan.status, 0)
@@ -269,11 +273,55 @@ test('failed backups leave transcripts unchanged and fail despite --no-fail', ()
   try {
     const result = run(['sweep', '--source', 'claude-code', '--backup-dir', backupDir, '--no-fail'], home)
     assert.equal(result.status, 1)
-    assert.match(result.stderr, /cannot clean/)
+    assert.match(result.stderr, /skipped/)
+    assert.match(result.stderr, /file left unchanged/)
+    assert.match(result.stdout, /Skipped 1 file/)
     assert.doesNotMatch(result.stdout, /originals backed up/)
     assert.equal(readFileSync(file, 'utf8'), original)
     assert.equal(readFileSync(backupDir, 'utf8'), 'keep this file')
     assert.equal(JSON.parse(run(['scan', '--json'], home).stdout).totalFindings, 1)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('a failed manifest prevents writes to every Cursor row sharing the backup', () => {
+  const home = mkdtempSync(join(tmpdir(), 'broom-cli-cursor-manifest-'))
+  const root = process.platform === 'darwin'
+    ? join(home, 'Library', 'Application Support', 'Cursor', 'User')
+    : process.platform === 'win32'
+      ? join(home, 'AppData', 'Roaming', 'Cursor', 'User')
+      : join(home, '.config', 'Cursor', 'User')
+  const storage = join(root, 'globalStorage')
+  mkdirSync(storage, { recursive: true })
+  const file = join(storage, 'state.vscdb')
+  const database = new DatabaseSync(file)
+  database.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)')
+  const insert = database.prepare('INSERT INTO ItemTable VALUES (?, ?)')
+  insert.run('aichat.first', JSON.stringify({ text: SECRET }))
+  insert.run('aichat.second', JSON.stringify({ text: SECRET }))
+  database.close()
+  const original = readFileSync(file)
+  const backupDir = join(home, 'backups')
+  // The database copy succeeds, but the manifest cannot replace a directory.
+  mkdirSync(join(backupDir, 'manifest.json'), { recursive: true })
+  try {
+    const result = run(['sweep', '--source', 'cursor', '--backup-dir', backupDir, '--no-fail', '--json'], home)
+    assert.equal(result.status, 1, 'manifest errors must fail even with --no-fail')
+    const report = JSON.parse(result.stdout)
+    assert.equal(report.files.length, 2)
+    for (const row of report.files) {
+      assert.equal(row.applied, 0, 'a failed first backup must not authorize later rows')
+      assert.match(row.skipped, /backup failed|permission denied/)
+    }
+    assert.equal(report.files[0].skipped, report.files[1].skipped)
+    assert.equal((result.stderr.match(/broom: skipped /g) ?? []).length, 1, 'report the shared database failure once')
+    assert.deepEqual(readFileSync(file), original, 'the database must remain byte-for-byte unchanged')
+    const backupFile = join(backupDir, file.replace(/^[a-zA-Z]:/, '').replace(/^[\\/]+/, ''))
+    assert.ok(!existsSync(backupFile), 'roll back the copy when its manifest cannot be committed')
+    assert.ok(!existsSync(join(backupDir, 'manifest.json.tmp')))
+    assert.ok(!result.stdout.includes(SECRET))
+    assert.ok(!result.stderr.includes(SECRET))
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
@@ -417,6 +465,14 @@ test('partial backup failures retain a manifest for successful files', () => {
     assert.equal(manifest.files[0].original, first)
     assert.equal(readFileSync(manifest.files[0].backup, 'utf8'), original)
     assert.equal(manifest.redactionSummary.find(row => row.label === second).applied, 0)
+    // The failure is recorded, and the report names the file and where the
+    // successful backup went.
+    assert.equal(manifest.skipped.length, 1)
+    assert.equal(manifest.skipped[0].original, second)
+    assert.ok(!existsSync(join(backupDir, 'manifest.json.tmp')), 'manifest write must be atomic')
+    assert.match(result.stdout, /Skipped 1 file/)
+    assert.match(result.stdout, /Backups\s+.*1 file/)
+    assert.ok(!result.stdout.includes(SECRET))
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

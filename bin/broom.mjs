@@ -244,6 +244,7 @@ if (apply && !flag('--yes') && isInteractive()) {
 const backup    = (!noBackup && apply) ? new BackupSession(backupDir) : null
 
 const scanResults = []
+const reportedBackupFailures = new Set()
 let failures = 0
 
 for (const target of targets) {
@@ -265,21 +266,41 @@ for (const target of targets) {
     : raw
 
   let applied = 0
+  let skipped
 
   if (findings.length > 0 && isClean && apply) {
     try {
       const { text: redacted, applied: n } = redactText(text, findings)
-      // Back up before the first write to this file
-      if (backup) backup.backup(target.file)
-      target.write(redacted)
-      applied = n
+
+      // Back up before the first write to this file. If the backup fails —
+      // disk full, permission denied, … — skip this file and keep going: a
+      // transcript we couldn't back up must never be overwritten, and one bad
+      // file must not abort the whole sweep.
+      if (backup) {
+        try {
+          backup.backup(target.file)
+        } catch (e) {
+          failures++
+          skipped = e.message
+          // One Cursor database serves many chat rows; report its failure once.
+          if (!reportedBackupFailures.has(target.file)) {
+            reportedBackupFailures.add(target.file)
+            console.error(`broom: skipped '${target.label}': ${e.message} (file left unchanged)`)
+          }
+        }
+      }
+
+      if (skipped === undefined) {
+        target.write(redacted)
+        applied = n
+      }
     } catch (e) {
       failures++
       console.error(`broom: cannot clean '${target.label}': ${e.message}`)
     }
   }
 
-  scanResults.push({ target, findings, applied: isClean ? applied : undefined })
+  scanResults.push({ target, findings, applied: isClean ? applied : undefined, skipped })
 }
 
 // ── Write manifest after all writes complete ──────────────────────────────────
@@ -296,7 +317,13 @@ if (backup) {
 if (jsonOut) {
   printJsonReport(scanResults)
 } else if (scanResults.length) {
-  printReport(scanResults, { clean: isClean, apply, verbose, backedUp: !!backup })
+  printReport(scanResults, {
+    clean: isClean,
+    apply,
+    verbose,
+    backedUp: !!backup,
+    backup: backup ? backup.summary() : undefined,
+  })
 } else {
   console.error('broom: no transcripts could be scanned')
 }

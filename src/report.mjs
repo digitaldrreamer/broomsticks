@@ -1,12 +1,12 @@
 // Report formatter — human-readable and JSON output for scan/clean results.
 
 import { createHash } from 'node:crypto'
-import { severity as color, bold, dim } from './ui.mjs'
+import { severity as color, bold, dim, formatBytes } from './ui.mjs'
 
 /**
  * @typedef {import('./detector.mjs').Finding} Finding
  * @typedef {import('./sources/claude-code.mjs').Target} Target
- * @typedef {{ target: Target, findings: Finding[], applied?: number }} ScanResult
+ * @typedef {{ target: Target, findings: Finding[], applied?: number, skipped?: string }} ScanResult
  */
 
 const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low']
@@ -83,13 +83,15 @@ function shorten(label) {
  * useful for a handful of findings, overwhelming for thousands.
  *
  * @param {ScanResult[]} results
- * @param {{ clean?: boolean, apply?: boolean, verbose?: boolean, backedUp?: boolean }} [opts]
+ * @param {{ clean?: boolean, apply?: boolean, verbose?: boolean, backedUp?: boolean,
+ *           backup?: { dir: string, files: number, bytes: number } }} [opts]
  *   clean   — true when called from `broom clean` (adjusts wording)
  *   apply   — true when redaction was actually performed
  *   verbose — true to list every finding, not just per-file counts
+ *   backup  — backup session summary; prints where the originals went
  */
 export function printReport(results, opts = {}) {
-  const { clean = false, apply = false, verbose = false, backedUp = true } = opts
+  const { clean = false, apply = false, verbose = false, backedUp = true, backup } = opts
 
   const totalOccurrences = results.reduce((n, r) => n + r.findings.length, 0)
   const totalApplied = results.reduce((n, r) => n + (r.applied ?? 0), 0)
@@ -168,10 +170,42 @@ export function printReport(results, opts = {}) {
     }
   }
 
+  // ── Skipped files — a failed backup leaves the original untouched ──────────
+  // Grouped by file: one Cursor database can serve many chat rows, and the
+  // whole database is what failed to back up.
+  const skippedFiles = new Map()
+  for (const r of results) {
+    if (!r.skipped) continue
+    const key  = r.target.file ?? r.target.label
+    const seen = skippedFiles.get(key)
+    if (seen) { seen.chats++; continue }
+    skippedFiles.set(key, {
+      source: r.target.source,
+      label:  r.target.label,
+      file:   r.target.file,
+      reason: r.skipped,
+      chats:  1,
+    })
+  }
+
+  if (skippedFiles.size > 0) {
+    console.log(`\n  ${bold(`Skipped ${plural(skippedFiles.size, 'file')}`)} — not redacted because the backup failed:`)
+    for (const entry of skippedFiles.values()) {
+      const path  = entry.chats > 1 && entry.file ? entry.file : entry.label
+      const chats = entry.chats > 1 ? dim(`  (${entry.chats} chats)`) : ''
+      console.log(`    ${SOURCE_NAME[entry.source] ?? entry.source}  ${shorten(path)}${chats}`)
+      console.log(`      ${dim(entry.reason)}`)
+    }
+  }
+
   // ── Totals + next steps ─────────────────────────────────────────────────────
   console.log(`\n  Severity: ${breakdownFromCounts(distinctBySeverity(allFindings).counts)}`)
   if (!verbose) console.log(dim(`  Re-run with --verbose to list every occurrence.`))
   if (!apply) console.log(`  Run ${bold('broom sweep')} (or ${bold('broom clean --apply')}) to redact in place — backs up first.`)
+  if (backup && backup.files > 0) {
+    const size = `${plural(backup.files, 'file')}, ${formatBytes(backup.bytes)}`
+    console.log(`  ${bold('Backups')}  ${shorten(backup.dir)}  ${dim(`(${size})`)}`)
+  }
   console.log()
 }
 
@@ -189,11 +223,13 @@ export function printJsonReport(results) {
     totalFindings,
     files: results
       .filter(r => r.findings.length > 0)
-      .map(({ target, findings, applied }) => ({
+      .map(({ target, findings, applied, skipped }) => ({
         source:   target.source,
         label:    target.label,
         file:     target.file,
         applied:  applied ?? null,
+        // Present only when the backup failed and the file was left untouched.
+        ...(skipped ? { skipped } : {}),
         findings: findings.map(f => ({
           ruleId:   f.ruleId,
           title:    f.title,
