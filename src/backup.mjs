@@ -19,7 +19,7 @@
 //     written by the caller — the original is left untouched.
 
 import {
-  copyFileSync, existsSync, mkdirSync, renameSync, statSync, statfsSync, writeFileSync,
+  copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -198,9 +198,14 @@ export class BackupSession {
 
     const blockSize = Number(stats?.frsize ?? stats?.bsize ?? 0)
     const available = Number(stats?.bavail ?? stats?.bfree ?? 0) * blockSize
-    // A filesystem that reports nothing useful (0 blocks free on some network
-    // mounts) is treated as unknown — the copy itself will report the truth.
-    if (!Number.isFinite(available) || available <= 0 || blockSize <= 0) return
+    if (!Number.isFinite(available) || blockSize <= 0) return
+
+    // A mount that reports no capacity at all is treated as unknown — the copy
+    // itself will report the truth. A real filesystem reporting zero free
+    // blocks is genuinely full, so fail fast instead of attempting a copy that
+    // can only leave a truncated backup behind.
+    const totalBlocks = Number(stats?.blocks)
+    if (available <= 0 && !(totalBlocks > 0)) return
 
     const needed = bytes + SPACE_MARGIN
     if (available >= needed) return
@@ -251,13 +256,17 @@ export class BackupSession {
       redactionSummary: this._summary,
     }
 
+    const target = join(this.dir, 'manifest.json')
+    const tmp    = `${target}.tmp`
+
     try {
       mkdirSync(this.dir, { recursive: true })
-      const target = join(this.dir, 'manifest.json')
-      const tmp    = `${target}.tmp`
       writeFileSync(tmp, JSON.stringify(manifest, null, 2) + '\n', 'utf8')
       renameSync(tmp, target)
     } catch (err) {
+      // A failed write (ENOSPC, most likely) must not leave a partial temp file
+      // consuming space on the disk we are already short of.
+      try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
       // Interim flushes are best-effort; the final write reports failures.
       if (strict) throw err
     }

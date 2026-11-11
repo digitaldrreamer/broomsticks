@@ -63,7 +63,7 @@ test('refuses to copy when the destination disk is too full to hold the backup',
     let checked
     const session = new BackupSession(backupDir, {
       // 4 blocks of 4 KiB = 16 KiB free, far below the 64 KiB file + headroom.
-      statfs: dir => { checked = dir; return { bsize: 4096, frsize: 4096, bavail: 4 } },
+      statfs: dir => { checked = dir; return { bsize: 4096, frsize: 4096, bavail: 4, blocks: 1000 } },
     })
 
     assert.throws(() => session.backup(original), err => {
@@ -93,7 +93,7 @@ test('copies normally when the destination disk has room', () => {
 
     const backupDir = join(tmp, 'backups')
     const session = new BackupSession(backupDir, {
-      statfs: () => ({ bsize: 4096, frsize: 4096, bavail: 1024 * 1024 }), // 4 GiB
+      statfs: () => ({ bsize: 4096, frsize: 4096, bavail: 1024 * 1024, blocks: 2 * 1024 * 1024 }), // 4 GiB
     })
     const dest = session.backup(original)
 
@@ -101,6 +101,77 @@ test('copies normally when the destination disk has room', () => {
     assert.equal(readFileSync(dest, 'utf8'), '{"text":"hi"}\n')
     assert.equal(session.summary().files, 1)
     assert.ok(session.summary().bytes > 0)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('a genuinely full filesystem fails fast instead of attempting the copy', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-zero-'))
+  try {
+    const original = join(tmp, 'session.jsonl')
+    writeFileSync(original, 'x'.repeat(4096))
+
+    const backupDir = join(tmp, 'backups')
+    const session = new BackupSession(backupDir, {
+      // Full disk: no free blocks, but the mount does report its capacity.
+      statfs: () => ({ bsize: 4096, frsize: 4096, bavail: 0, bfree: 0, blocks: 1000 }),
+    })
+
+    assert.throws(() => session.backup(original), err => {
+      assert.ok(err instanceof BackupError)
+      assert.equal(err.code, 'ENOSPC')
+      assert.match(err.message, /0 B free/)
+      return true
+    })
+
+    assert.ok(!existsSync(backupDir), 'nothing is written when the disk is full')
+    assert.equal(session.summary().skipped.length, 1)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('a filesystem that reports no capacity is treated as unknown, not full', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-unknown-'))
+  try {
+    const original = join(tmp, 'session.jsonl')
+    writeFileSync(original, '{"text":"hi"}\n')
+
+    const backupDir = join(tmp, 'backups')
+    const session = new BackupSession(backupDir, {
+      // No block count at all (some network mounts) — the copy itself decides.
+      statfs: () => ({ bsize: 4096, frsize: 4096, bavail: 0 }),
+    })
+    const dest = session.backup(original)
+
+    assert.ok(existsSync(dest))
+    assert.equal(readFileSync(dest, 'utf8'), '{"text":"hi"}\n')
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('a failed manifest write leaves no temporary file behind', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-tmp-'))
+  try {
+    const original = join(tmp, 'session.jsonl')
+    writeFileSync(original, 'x')
+
+    const backupDir = join(tmp, 'backups')
+    const session = new BackupSession(backupDir)
+    // Block the atomic rename: a directory sits where manifest.json must go.
+    mkdirSync(join(backupDir, 'manifest.json'), { recursive: true })
+    const tmpManifest = join(backupDir, 'manifest.json.tmp')
+
+    session.backup(original) // interim flush is best-effort
+    assert.ok(!existsSync(tmpManifest), 'no temp file after a failed interim flush')
+
+    assert.throws(
+      () => session.writeManifest([{ target: { source: 'claude-code', label: original }, applied: 1 }]),
+      'the final write must still report the failure',
+    )
+    assert.ok(!existsSync(tmpManifest), 'no temp file after a failed strict write')
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
