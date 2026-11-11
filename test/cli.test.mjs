@@ -60,6 +60,10 @@ test('scan → clean --apply → re-scan lifecycle', () => {
     assert.ok(stamps.length >= 1)
     assert.ok(existsSync(join(backupsRoot, stamps[0], 'manifest.json')))
 
+    // The run tells the user where the backup went and how big it is.
+    assert.match(clean.stdout, /Backups\s+~[\\/]\.broom[\\/]backups/)
+    assert.match(clean.stdout, /\(\d+ files?, [\d.]+ (?:B|KB|MB|GB)\)/)
+
     // re-scan: clean now, zero exit
     const rescan = run(['scan', '--json', '--source', 'claude-code'], home)
     assert.equal(rescan.status, 0)
@@ -269,7 +273,9 @@ test('failed backups leave transcripts unchanged and fail despite --no-fail', ()
   try {
     const result = run(['sweep', '--source', 'claude-code', '--backup-dir', backupDir, '--no-fail'], home)
     assert.equal(result.status, 1)
-    assert.match(result.stderr, /cannot clean/)
+    assert.match(result.stderr, /skipped/)
+    assert.match(result.stderr, /file left unchanged/)
+    assert.match(result.stdout, /Skipped 1 file/)
     assert.doesNotMatch(result.stdout, /originals backed up/)
     assert.equal(readFileSync(file, 'utf8'), original)
     assert.equal(readFileSync(backupDir, 'utf8'), 'keep this file')
@@ -417,6 +423,14 @@ test('partial backup failures retain a manifest for successful files', () => {
     assert.equal(manifest.files[0].original, first)
     assert.equal(readFileSync(manifest.files[0].backup, 'utf8'), original)
     assert.equal(manifest.redactionSummary.find(row => row.label === second).applied, 0)
+    // The failure is recorded, and the report names the file and where the
+    // successful backup went.
+    assert.equal(manifest.skipped.length, 1)
+    assert.equal(manifest.skipped[0].original, second)
+    assert.ok(!existsSync(join(backupDir, 'manifest.json.tmp')), 'manifest write must be atomic')
+    assert.match(result.stdout, /Skipped 1 file/)
+    assert.match(result.stdout, /Backups\s+.*1 file/)
+    assert.ok(!result.stdout.includes(SECRET))
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

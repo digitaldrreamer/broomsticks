@@ -32,7 +32,7 @@ Two tools — use either or both:
 - **Clean up — `broom scan` / `broom clean`.** Finds secrets already written to disk and redacts them in place. Dry-run by default; every write is backed up first.
 - **Prevent — `broom proxy`.** A local proxy between your tools and the provider API that strips secrets out of requests *before they're sent* — and out of responses the model echoes back.
 
-**Safety by design:** nothing is modified without `--apply` · every touched file is backed up · only chat transcripts are read, never credential files like `~/.aws/credentials` · `scan`/`clean` do zero networking (enforced by a test) · redaction is non-reversible and idempotent.
+**Safety by design:** nothing is modified without `--apply` · every touched file is backed up (after a free-space check) · only chat transcripts are read, never credential files like `~/.aws/credentials` · `scan`/`clean` do zero networking (enforced by a test) · redaction is non-reversible and idempotent.
 
 ## Commands
 
@@ -64,6 +64,10 @@ By default the report is a compact summary — grouped by AI client, showing how
 | `--no-allowlist` | Report every finding, ignoring the allowlist |
 | `--json` | Emit findings as JSON |
 | `--no-fail` | Exit `0` for findings; scan, backup and write errors still fail |
+
+#### Backups
+
+Every write is preceded by a copy of the original under `~/.broom/backups/<timestamp>/` (or `--backup-dir`). Before copying, broom checks that the destination has room for the file plus any SQLite `-wal`/`-shm` sidecars. If space is short — or the copy fails for any other reason — **that transcript is skipped and left untouched**, the rest of the run continues, and the file is listed under *Skipped* with the reason. `manifest.json` is rewritten after each backed-up file (so an interrupted run still records what was saved), and the end of the report prints where the backup went and how large it is. Backups are never pruned automatically — delete old folders under `~/.broom/backups/` once you no longer need them.
 
 ### `proxy`
 
