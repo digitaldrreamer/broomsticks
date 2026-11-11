@@ -67,7 +67,7 @@ By default the report is a compact summary — grouped by AI client, showing how
 
 #### Backups
 
-Every write is preceded by a copy of the original under `~/.broom/backups/<timestamp>/` (or `--backup-dir`). Before copying, broom checks that the destination has room for the file plus any SQLite `-wal`/`-shm` sidecars. If space is short — or the copy fails for any other reason — **that transcript is skipped and left untouched**, the rest of the run continues, and the file is listed under *Skipped* with the reason. `manifest.json` is rewritten after each backed-up file (so an interrupted run still records what was saved), and the end of the report prints where the backup went and how large it is. Backups are never pruned automatically — delete old folders under `~/.broom/backups/` once you no longer need them.
+Every write is preceded by a copy of the original under `~/.broom/backups/<timestamp>/` (or `--backup-dir`). Before copying, broom checks that the destination has room for the file plus any SQLite `-wal`/`-shm` sidecars. If space is short, copying fails, or the backup cannot be recorded in `manifest.json`, **that transcript is skipped and left untouched**, the rest of the run continues, and the file is listed under *Skipped* with the reason. Failed attempts remove their new copies and restore any older backups they replaced. `manifest.json` is rewritten after each backed-up file, before redaction is allowed, so an interrupted run still records the backups of modified originals. The end of the report prints where the backup went and how large it is. Backups are never pruned automatically — delete old folders under `~/.broom/backups/` once you no longer need them.
 
 ### `proxy`
 

@@ -9,9 +9,10 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import fs, { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { BackupSession, BackupError } from '../src/backup.mjs'
 
@@ -152,7 +153,7 @@ test('a filesystem that reports no capacity is treated as unknown, not full', ()
   }
 })
 
-test('a failed manifest write leaves no temporary file behind', () => {
+test('a failed manifest commit refuses the backup and removes its new files', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-tmp-'))
   try {
     const original = join(tmp, 'session.jsonl')
@@ -164,14 +165,38 @@ test('a failed manifest write leaves no temporary file behind', () => {
     mkdirSync(join(backupDir, 'manifest.json'), { recursive: true })
     const tmpManifest = join(backupDir, 'manifest.json.tmp')
 
-    session.backup(original) // interim flush is best-effort
-    assert.ok(!existsSync(tmpManifest), 'no temp file after a failed interim flush')
+    assert.throws(() => session.backup(original), BackupError)
+    assert.ok(!existsSync(tmpManifest), 'no temp file after a failed manifest commit')
+    assert.ok(!existsSync(session._destPath(original)), 'an unrecorded copy must be removed')
+    assert.equal(readFileSync(original, 'utf8'), 'x', 'the original must remain unchanged')
+    assert.equal(session.summary().files, 0)
+    assert.equal(session.summary().bytes, 0)
+    assert.equal(session.summary().skipped.length, 1)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('a failed final manifest write removes its temporary file and preserves backups', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-final-'))
+  try {
+    const original = join(tmp, 'session.jsonl')
+    writeFileSync(original, 'saved original')
+
+    const backupDir = join(tmp, 'backups')
+    const session = new BackupSession(backupDir)
+    const dest = session.backup(original)
+    const manifestPath = join(backupDir, 'manifest.json')
+    rmSync(manifestPath)
+    mkdirSync(manifestPath)
 
     assert.throws(
       () => session.writeManifest([{ target: { source: 'claude-code', label: original }, applied: 1 }]),
       'the final write must still report the failure',
     )
-    assert.ok(!existsSync(tmpManifest), 'no temp file after a failed strict write')
+    assert.ok(!existsSync(join(backupDir, 'manifest.json.tmp')), 'no temp file after a failed strict write')
+    assert.equal(readFileSync(dest, 'utf8'), 'saved original')
+    assert.equal(session.summary().files, 1)
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }
@@ -194,6 +219,170 @@ test('SQLite -wal and -shm siblings are backed up with the database', () => {
     assert.equal(readFileSync(dest + '-shm', 'utf8'), 'shared-memory')
     // The size accounting covers the sidecars, not just the main file.
     assert.equal(session.summary().bytes, Buffer.byteLength('main-dbwrite-ahead-logshared-memory'))
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('a late SQLite copy failure removes partial copies and preserves earlier backups', t => {
+  const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-sidecar-full-'))
+  let copyMock
+  try {
+    const good = join(tmp, 'good.jsonl')
+    const db = join(tmp, 'state.vscdb')
+    writeFileSync(good, 'saved original')
+    writeFileSync(db, 'main-db')
+    writeFileSync(db + '-wal', 'write-ahead-log')
+    writeFileSync(db + '-shm', 'shared-memory')
+
+    const backupDir = join(tmp, 'backups')
+    const session = new BackupSession(backupDir)
+    const goodDest = session.backup(good)
+    const copy = fs.copyFileSync
+    const copied = []
+    const destinations = []
+    copyMock = t.mock.method(fs, 'copyFileSync', (source, dest, ...args) => {
+      destinations.push(dest)
+      if (source === db + '-shm') {
+        // The main database and WAL have already copied; the final copy runs
+        // out of space after writing a partial file of its own.
+        writeFileSync(dest, 'partial')
+        throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+      }
+      copy(source, dest, ...args)
+      copied.push(source)
+    })
+    syncBuiltinESMExports()
+
+    assert.throws(() => session.backup(db), err => {
+      assert.ok(err instanceof BackupError)
+      assert.equal(err.code, 'ENOSPC')
+      return true
+    })
+    assert.deepEqual(copied, [db, db + '-wal'])
+    for (const dest of destinations) {
+      assert.ok(!existsSync(dest), 'every file created by the failed copy must be removed')
+    }
+    assert.ok(!existsSync(session._destPath(db)))
+    assert.ok(!existsSync(session._destPath(db) + '-wal'))
+    assert.ok(!existsSync(session._destPath(db) + '-shm'))
+    assert.equal(readFileSync(goodDest, 'utf8'), 'saved original')
+    assert.equal(readFileSync(db, 'utf8'), 'main-db')
+    assert.equal(readFileSync(db + '-wal', 'utf8'), 'write-ahead-log')
+    assert.equal(readFileSync(db + '-shm', 'utf8'), 'shared-memory')
+    assert.equal(session.summary().files, 1)
+    assert.equal(session.summary().bytes, Buffer.byteLength('saved original'))
+    const manifest = JSON.parse(readFileSync(join(backupDir, 'manifest.json'), 'utf8'))
+    assert.deepEqual(manifest.files.map(file => file.original), [good])
+    assert.equal(manifest.skipped[0].original, db)
+  } finally {
+    if (copyMock) {
+      copyMock.mock.restore()
+      syncBuiltinESMExports()
+    }
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('a later sidecar failure preserves pre-existing destination files and directories', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-existing-'))
+  try {
+    const db = join(tmp, 'state.vscdb')
+    writeFileSync(db, 'new main-db')
+    writeFileSync(db + '-wal', 'new write-ahead-log')
+    writeFileSync(db + '-shm', 'new shared-memory')
+
+    const session = new BackupSession(join(tmp, 'backups'))
+    const dest = session._destPath(db)
+    mkdirSync(dest + '-shm', { recursive: true })
+    writeFileSync(dest, 'previous main-db backup')
+    writeFileSync(dest + '-wal', 'previous WAL backup')
+    writeFileSync(join(dest + '-shm', 'keep.txt'), 'existing directory content')
+
+    assert.throws(() => session.backup(db), BackupError)
+    assert.equal(readFileSync(dest, 'utf8'), 'previous main-db backup')
+    assert.equal(readFileSync(dest + '-wal', 'utf8'), 'previous WAL backup')
+    assert.equal(readFileSync(join(dest + '-shm', 'keep.txt'), 'utf8'), 'existing directory content')
+    assert.equal(session.summary().files, 0)
+    assert.equal(session.summary().bytes, 0)
+    assert.equal(session.summary().skipped.length, 1)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('a failed manifest commit restores previous backup bytes after publishing new copies', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-manifest-restore-'))
+  try {
+    const db = join(tmp, 'state.vscdb')
+    writeFileSync(db, 'new main-db')
+    writeFileSync(db + '-wal', 'new write-ahead-log')
+    writeFileSync(db + '-shm', 'new shared-memory')
+
+    const backupDir = join(tmp, 'backups')
+    const session = new BackupSession(backupDir)
+    const dest = session._destPath(db)
+    mkdirSync(join(backupDir, 'manifest.json'), { recursive: true })
+    mkdirSync(dirname(dest), { recursive: true })
+    writeFileSync(dest, 'previous main-db backup')
+    writeFileSync(dest + '-wal', 'previous WAL backup')
+
+    assert.throws(() => session.backup(db), BackupError)
+    assert.equal(readFileSync(dest, 'utf8'), 'previous main-db backup')
+    assert.equal(readFileSync(dest + '-wal', 'utf8'), 'previous WAL backup')
+    assert.ok(!existsSync(dest + '-shm'), 'the newly created sidecar must be removed')
+    assert.ok(!existsSync(join(backupDir, 'manifest.json.tmp')))
+    assert.equal(session.summary().files, 0)
+    assert.equal(session.summary().bytes, 0)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
+test('a manifest-failed database stays blocked while another file can succeed after recovery', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'broom-backup-manifest-recovery-'))
+  try {
+    const first = join(tmp, 'first.jsonl')
+    const db = join(tmp, 'state.vscdb')
+    const next = join(tmp, 'next.jsonl')
+    writeFileSync(first, 'first original')
+    writeFileSync(db, 'database original')
+    writeFileSync(next, 'next original')
+
+    const backupDir = join(tmp, 'backups')
+    const session = new BackupSession(backupDir)
+    const firstDest = session.backup(first)
+    const manifestPath = join(backupDir, 'manifest.json')
+    const savedManifest = readFileSync(manifestPath, 'utf8')
+    const blockedTemp = join(backupDir, 'manifest.json.tmp')
+    mkdirSync(blockedTemp)
+
+    let failure
+    assert.throws(() => session.backup(db), err => {
+      assert.ok(err instanceof BackupError)
+      failure = err
+      return true
+    })
+    assert.equal(readFileSync(manifestPath, 'utf8'), savedManifest, 'the previous manifest must stay intact')
+    assert.equal(readFileSync(firstDest, 'utf8'), 'first original')
+    assert.ok(!existsSync(session._destPath(db)))
+    assert.equal(session.summary().files, 1)
+    assert.equal(session.summary().bytes, Buffer.byteLength('first original'))
+
+    rmSync(blockedTemp, { recursive: true })
+    assert.throws(() => session.backup(db), err => err === failure,
+      'another Cursor row must receive the cached failure even after the obstruction is removed')
+    assert.equal(session.summary().skipped.length, 1)
+    assert.ok(!existsSync(session._destPath(db)))
+
+    const nextDest = session.backup(next)
+    assert.equal(readFileSync(nextDest, 'utf8'), 'next original')
+    assert.equal(session.summary().files, 2)
+    assert.equal(session.summary().bytes, Buffer.byteLength('first originalnext original'))
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    assert.deepEqual(manifest.files.map(file => file.original), [first, next])
+    assert.equal(manifest.skipped.length, 1)
+    assert.equal(manifest.skipped[0].original, db)
   } finally {
     rmSync(tmp, { recursive: true, force: true })
   }

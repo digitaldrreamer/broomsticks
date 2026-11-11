@@ -19,7 +19,8 @@
 //     written by the caller — the original is left untouched.
 
 import {
-  copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync,
+  copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync,
+  statSync, statfsSync, writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -82,7 +83,7 @@ export class BackupSession {
    *
    * @param {string} file  Absolute path to the file to back up.
    * @returns {string}  The backup path.
-   * @throws {BackupError}  When free space is insufficient or the copy fails.
+   * @throws {BackupError}  When space, copying, or manifest persistence fails.
    *   The caller must not write the original in that case.
    */
   backup(file) {
@@ -101,22 +102,89 @@ export class BackupSession {
 
     this._ensureSpace(abs, bytes)
 
+    let staging
+    let recorded = false
+    const pending = []
     try {
       mkdirSync(dirname(dest), { recursive: true })
-      copyFileSync(abs, dest)
-      for (const suffix of siblings) {
-        copyFileSync(abs + suffix, dest + suffix)
+      staging = mkdtempSync(join(dirname(dest), '.broom-backup-'))
+
+      // Stage the entire database/sidecar group before replacing any existing
+      // backup. A failed copy can then remove only files owned by this attempt.
+      for (const suffix of ['', ...siblings]) {
+        const entry = {
+          dest: dest + suffix,
+          staged: join(staging, `new${suffix}`),
+          previous: join(staging, `old${suffix}`),
+          replaced: false,
+          published: false,
+        }
+        pending.push(entry)
+        copyFileSync(abs + suffix, entry.staged)
       }
+
+      for (const entry of pending) {
+        let existing
+        try {
+          existing = lstatSync(entry.dest)
+        } catch (err) {
+          if (err.code !== 'ENOENT') throw err
+        }
+        if (existing) {
+          // Do not move aside directories or other non-file destinations.
+          if (!existing.isFile() && !existing.isSymbolicLink()) {
+            const err = new Error('backup destination is not a regular file')
+            err.code = existing.isDirectory() ? 'EISDIR' : 'EINVAL'
+            throw err
+          }
+          renameSync(entry.dest, entry.previous)
+          entry.replaced = true
+        }
+        renameSync(entry.staged, entry.dest)
+        entry.published = true
+      }
+
+      this._entries.push({ original: abs, backup: dest, bytes })
+      this._bytes += bytes
+      recorded = true
+      // Redaction is allowed only after this entry is in the manifest. Until
+      // that commit succeeds, both the files and the accounting can roll back.
+      this._persistManifest(true)
     } catch (err) {
-      this._fail(abs, describeCopyError(err), { code: err.code ?? 'EBACKUP', cause: err })
+      if (recorded) {
+        this._entries.pop()
+        this._bytes -= bytes
+      }
+
+      let rollbackError
+      for (const entry of pending.reverse()) {
+        try {
+          if (entry.published) rmSync(entry.dest, { force: true })
+          if (entry.replaced) renameSync(entry.previous, entry.dest)
+        } catch (failure) {
+          rollbackError ??= failure
+        }
+      }
+      if (staging && !rollbackError) {
+        try { rmSync(staging, { recursive: true, force: true }) } catch (failure) { rollbackError = failure }
+      }
+      // If restoring an old backup failed, keep its recovery files instead of
+      // deleting the staging directory that may hold the only remaining copy.
+      const reason = describeCopyError(err) + (rollbackError
+        ? `; rollback failed: ${rollbackError.message}; recovery files kept in ${staging}`
+        : '')
+      this._fail(abs, reason, { code: err.code ?? 'EBACKUP', cause: err })
     }
 
+    // A failed manifest must never leave this set authorizing later Cursor rows.
     this._copied.add(abs)
-    this._bytes += bytes
-    this._entries.push({ original: abs, backup: dest, bytes })
-    // Flush now, not only at the end: a crash or Ctrl-C mid-run must still
-    // leave a manifest describing the backups that were actually made.
-    this._persistManifest()
+    try {
+      rmSync(staging, { recursive: true, force: true })
+    } catch (err) {
+      // The backup and manifest have committed; do not roll them back merely
+      // because an old replacement file could not be removed.
+      console.error(`broom: backup saved, but cannot remove temporary backup files at '${staging}': ${err.message}`)
+    }
 
     return dest
   }
@@ -242,7 +310,7 @@ export class BackupSession {
 
   /**
    * Serialise the manifest, atomically replacing the previous one.
-   * @param {boolean} [strict]  Rethrow write errors (final call only).
+   * @param {boolean} [strict]  Rethrow errors when committing a backup or summary.
    */
   _persistManifest(strict = false) {
     // Nothing was saved, so there is nothing to record.
@@ -267,7 +335,8 @@ export class BackupSession {
       // A failed write (ENOSPC, most likely) must not leave a partial temp file
       // consuming space on the disk we are already short of.
       try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
-      // Interim flushes are best-effort; the final write reports failures.
+      // Failure-record updates are best-effort; backup commits and the final
+      // summary must report failures to their caller.
       if (strict) throw err
     }
   }

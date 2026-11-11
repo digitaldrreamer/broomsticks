@@ -23,6 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `manifest.json` is now written atomically after every backed-up file, so an
   interrupted or partially failed run still records the backups it made. Files
   that were skipped are recorded there with the reason.
+- A failed SQLite sidecar copy removes the attempt's new backup files. If copying
+  or recording the manifest fails, earlier backup contents are restored and the
+  original stays untouched, including later chat rows in the same database.
 - The report now prints where the backup went and how large it is, and lists any
   files that were skipped because their backup failed.
 
