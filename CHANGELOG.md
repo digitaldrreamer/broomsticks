@@ -4,18 +4,14 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] — unreleased
-
-### Added
-- New `labeled-password` rule: detects credentials pasted in prose as
-  `password:` / `passwd:` / `passphrase:` values. Lower length floor (8) than
-  the generic catch-all with a modest entropy gate, so short labeled secrets are
-  caught while `printenv` `PWD=` dumps and common placeholders
-  (`your-password`, `<redacted>`, …) are filtered out.
-- Rules can now carry an optional `deny` regex to drop placeholder values that
-  clear the entropy gate.
+## [0.3.1] — 2026-11-13
 
 ### Fixed
+- Redaction preserves JSON and JSONL structure, escapes, serialized tool
+  arguments, and Cursor TEXT/BLOB storage. Malformed records and dictionary-key
+  collisions are skipped before writing instead of risking transcript data loss.
+- The proxy refuses requests or responses whose redaction fails, and the Claude
+  Code Stop hook still alerts on findings when another transcript is malformed.
 - `clean --apply` / `sweep` no longer crash with an unhandled `ENOSPC` when the
   backup destination is full. Free space is checked before each copy (including
   SQLite `-wal`/`-shm` sidecars); a file that cannot be backed up is skipped,
@@ -28,6 +24,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   original stays untouched, including later chat rows in the same database.
 - The report now prints where the backup went and how large it is, and lists any
   files that were skipped because their backup failed.
+
+## [0.3.0] — 2026-07-03
+
+### Added
+- New `labeled-password` rule: detects credentials pasted in prose as
+  `password:` / `passwd:` / `passphrase:` values. Lower length floor (8) than
+  the generic catch-all with a modest entropy gate, so short labeled secrets are
+  caught while `printenv` `PWD=` dumps and common placeholders
+  (`your-password`, `<redacted>`, …) are filtered out.
+- Rules can now carry an optional `deny` regex to drop placeholder values that
+  clear the entropy gate.
 
 ## [0.2.1] — 2026-07-02
 
@@ -97,6 +104,8 @@ First public release.
 - Extended-thinking blocks are passed through the proxy unredacted to preserve
   their signatures — see the README Limitations section.
 
+[0.3.1]: https://github.com/digitaldrreamer/broomsticks/releases/tag/v0.3.1
+[0.3.0]: https://github.com/digitaldrreamer/broomsticks/releases/tag/v0.3.0
 [0.2.1]: https://github.com/digitaldrreamer/broomsticks/releases/tag/v0.2.1
 [0.2.0]: https://github.com/digitaldrreamer/broomsticks/releases/tag/v0.2.0
 [0.1.1]: https://github.com/digitaldrreamer/broomsticks/releases/tag/v0.1.1
